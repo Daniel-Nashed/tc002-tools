@@ -1,0 +1,41 @@
+# Copy this file to tc002-tools.conf (gitignored - never commit device
+# details) and fill in your own values. Parsed by install/common.sh with a
+# plain key=value reader, not sourced as shell code.
+
+# Device IP address. If set (and DEVICE below is left blank), every
+# script connects over network ADB automatically - "adb connect
+# <DEVICE_IP>:5555", verified against the real output (not just the exit
+# code - see install/common.sh), before doing anything else. This IS the
+# "is the device even there" check. Also used for SSH/SCP verification
+# once Dropbear is running. Never commit a customer-specific IP address
+# to this repo.
+DEVICE_IP=
+
+# Hostname reported by reverse DNS during discovery (see
+# install/discover_device.sh and tc002-discover/README.md's validated
+# reverse-DNS section) - informational only right now, for ssh/scp
+# commands you type by hand that might prefer a stable name over a
+# DHCP-assigned IP. Nothing in install/*.sh reads this back; it is not a
+# substitute for DEVICE_IP above, which is what ADB actually connects to.
+DEVICE_HOSTNAME=
+
+# Explicit ADB device serial (`adb devices` to list) - only needed for a
+# USB-connected device, or to skip the DEVICE_IP auto-connect and target
+# an already-established network connection directly. Overrides DEVICE_IP
+# when set. This project never assumes the first connected device: set at
+# least one of DEVICE or DEVICE_IP, or every script refuses to run.
+DEVICE=
+
+# Port Dropbear listens on. Kept off 22 during evaluation intentionally -
+# see docs/security.md.
+SSH_PORT=2222
+
+# Path to a single SSH public key file to install as authorized_keys.
+# Must be a public key (ssh-ed25519/ssh-rsa/ecdsa-sha2-*/...); private
+# keys are rejected. Never commit the key file itself if it lives under
+# this repo.
+AUTHORIZED_KEY=
+
+# On-device installation prefix. /data is the only verified location -
+# see docs/device_layout.md.
+INSTALL_PREFIX=/data

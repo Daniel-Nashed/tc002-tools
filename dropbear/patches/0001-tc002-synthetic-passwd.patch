@@ -1,0 +1,9 @@
+--- a/src/dbutil.c
++++ b/src/dbutil.c
+@@ -879,3 +879,6 @@
+ 	/* Null terminate */
+ 	dirtytext[j] = '\0';
+ }
++
++/* tc002-tools: FlyThings synthetic passwd fallback - see dropbear/flythings-passwd-fallback.c */
++#include "flythings-passwd-fallback.c"
