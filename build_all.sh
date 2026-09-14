@@ -70,6 +70,11 @@ if [ $# -eq 0 ] || [ "${1#-}" != "$1" ]; then
   # flag still gets build/build_all.sh's own clear error, instead of
   # either being silently swallowed by the "already built" skip below.
   NEEDS_REAL_PARSE=0
+  # Anything the case below does not recognize - a typo, or a future flag
+  # only build/build_all.sh itself knows about - forwarded through
+  # verbatim below so ITS OWN parsing still gives the real error/usage,
+  # instead of this pre-check silently swallowing it.
+  UNKNOWN_ARGS=()
 
   for arg in "$@"
   do
@@ -80,7 +85,7 @@ if [ $# -eq 0 ] || [ "${1#-}" != "$1" ]; then
       --with-7zip) WITH_7ZIP=1 ;;
       --all) WITH_CURL=1; WITH_NGINX=1; WITH_OPENSSL=1; WITH_7ZIP=1 ;;
       --rebuild) REBUILD=1 ;;
-      *) NEEDS_REAL_PARSE=1 ;;
+      *) NEEDS_REAL_PARSE=1; UNKNOWN_ARGS+=("$arg") ;;
     esac
   done
 
@@ -132,14 +137,40 @@ if [ $# -eq 0 ] || [ "${1#-}" != "$1" ]; then
   # real failure, 2026-09-15). Cheap and idempotent, so just always do it
   # when nginx is requested at all, regardless of whether build_if_needed()
   # will actually end up rebuilding it this run.
-  if [ "$WITH_NGINX" -eq 1 ]; then
-    "${SCRIPT_DIR}/build/docker/register_qemu_arm.sh"
+  #
+  # A FAILED registration must not take curl/openssl/7zip down with it -
+  # this whole script runs under "set -e", so letting registration fail
+  # as a plain statement would abort the ENTIRE run right here, before
+  # ever reaching the container that builds those three, even though none
+  # of them need qemu-arm at all. Confirmed as a real, reported failure
+  # (2026-09-15, on an arm64 host where qemu-user-static's own binfmt
+  # registration for qemu-arm turned out to be missing): "the other tools
+  # worked but the on demand tools failed" - because ALL of them got
+  # caught in nginx's own prerequisite failure. Instead: catch the
+  # failure, drop nginx from what gets forwarded below, and let
+  # curl/openssl/7zip proceed - print_build_summary() at the end still
+  # correctly reports nginx as not built, so nothing is silently lost.
+  if [ "$WITH_NGINX" -eq 1 ] && ! "${SCRIPT_DIR}/build/docker/register_qemu_arm.sh"; then
+    log "warning: qemu-arm registration failed - nginx needs it just to run its own ./configure checks, so nginx is being SKIPPED this run rather than failing the whole build (curl/openssl/7zip, if also requested, still proceed below). Fix whatever qemu-arm/binfmt_misc issue this host/container hit, then re-run with --with-nginx (or --all) to build nginx too."
+    WITH_NGINX=0
   fi
 
-  # Forward everything to build/build_all.sh's own flag parsing
-  # (--with-curl, --rebuild, --all, --help, etc.) instead of trying to
-  # treat e.g. "--with-curl" as if it were a script to run.
-  exec "${SCRIPT_DIR}/build/docker/run.sh" build/build_all.sh "$@"
+  # Reconstructed from the (possibly just-corrected) WITH_X/REBUILD
+  # variables, not the original "$@" forwarded verbatim - this is what
+  # actually drops --with-nginx above when its prerequisite failed, and
+  # --all would otherwise still carry it through unchanged. UNKNOWN_ARGS
+  # preserves anything this pre-check did not itself recognize, so
+  # build/build_all.sh's own parsing still sees it and gives the real
+  # error for an actual typo/unsupported flag.
+  FORWARD_ARGS=()
+  [ "$WITH_CURL" -eq 1 ] && FORWARD_ARGS+=(--with-curl)
+  [ "$WITH_NGINX" -eq 1 ] && FORWARD_ARGS+=(--with-nginx)
+  [ "$WITH_OPENSSL" -eq 1 ] && FORWARD_ARGS+=(--with-openssl)
+  [ "$WITH_7ZIP" -eq 1 ] && FORWARD_ARGS+=(--with-7zip)
+  [ "$REBUILD" -eq 1 ] && FORWARD_ARGS+=(--rebuild)
+  FORWARD_ARGS+=("${UNKNOWN_ARGS[@]}")
+
+  exec "${SCRIPT_DIR}/build/docker/run.sh" build/build_all.sh "${FORWARD_ARGS[@]}"
 else
   # The "run one specific script directly" path (e.g. "./build_all.sh
   # build/build_nginx.sh") - same qemu-arm registration gap as above
