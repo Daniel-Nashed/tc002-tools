@@ -1,6 +1,19 @@
 # Security model
 
-Provisioning this project gives **root SSH access** to a TC002 device. Read this before deploying anything.
+## The starting point: the device ships open, not secured
+
+Out of the box, a TC002 has no meaningful access control at all: `adbd` is enabled, network-reachable, and grants
+root - unauthenticated, with no password and no key of any kind (see
+[platform.md](platform.md#what-is-adbd-and-why-does-it-matter-here)). Anyone who can reach the device on the
+network already has root on it today, before this project changes anything.
+
+`tc002-tools` does not introduce root access to the device - that access already exists. What it adds is the first
+*authenticated* way to get it: public-key SSH only, no password path at all, ever. Provisioning this project gives
+**root SSH access** to the device - read this whole document before deploying anything - but that access already
+existed via `adbd`; this project's job is to replace an open door with a real lock, not to add a new door.
+
+**Once you have confirmed SSH actually works, you can retire the still-open `adbd` path** - see
+["Retiring ADB, once SSH is confirmed working"](#retiring-adb-once-ssh-is-confirmed-working) below.
 
 ## Authentication
 
@@ -37,14 +50,43 @@ refuse public-key authentication too. Do not read this field as meaning anything
   Firmware-level vulnerabilities, key mismanagement, or a compromised client all remain possible; keep the device on a
   trusted network.
 
-## adbd is a separate, standing risk this project does not remove
+## adbd is a separate, standing risk this project does not remove by default
 
 See [platform.md](platform.md#what-is-adbd-and-why-does-it-matter-here) for what `adbd` is. This project's current
-procedure ([manual_rollout.md](manual_rollout.md)) leaves `adbd` running throughout - it is both the provisioning
-channel and, if the device is ever reachable over a network (not just USB) with `adbd` in its current
-unauthenticated-root configuration, an independent unauthenticated root access path that exists whether or not Dropbear
-is installed. Installing Dropbear does not close that path. See [recovery.md](recovery.md) for why ADB retirement is
-deliberately gated rather than automated today.
+procedure ([manual_rollout.md](manual_rollout.md)) leaves `adbd` running throughout by default - it is both the
+provisioning channel and, if the device is ever reachable over a network (not just USB) with `adbd` in its current
+unauthenticated-root configuration, an independent unauthenticated root access path that exists whether or not
+Dropbear is installed. **Installing Dropbear does not, by itself, close that path** - you have to actually retire
+ADB yourself, deliberately, once you are ready. See below.
+
+## Retiring ADB, once SSH is confirmed working
+
+`install/disable_adb.sh` pushes `runtime/disable_adb.sh` to the device (`/data/bin/disable_adb.sh`) - it only
+*pushes* the tool; it never runs it and never touches `adbd` itself. Actually stopping `adbd` is a second, separate,
+deliberate step, run from a different place:
+
+```sh
+install/disable_adb.sh                    # 1. push the tool, from your host (one-time)
+ssh -p 2222 root@DEVICE_IP                 # 2. confirm SSH actually works - this IS the verification
+/data/bin/disable_adb.sh                   # 3. run it FROM THE DEVICE, over that same SSH session
+```
+
+- Must be run **from the device**, over an SSH session you have already confirmed works - which is itself live
+  proof SSH works right now, at the exact moment you act. Never run it remotely over `adb shell` - that would make
+  disabling your own recovery path a single unattended command with no verification at all.
+- Asks for confirmation before acting (`-y` to skip it), restating the real risk every time: Dropbear does not yet
+  survive a reboot (see [manual_rollout.md](manual_rollout.md)), so if the device reboots after `adbd` is stopped,
+  you lose **both** remote-access paths until someone can physically or otherwise re-run `sshd.sh` - which itself
+  needs a remote-access path to run at all.
+- Only stops the running `adbd` process (`kill`, not an init-level stop - whether the firmware's own supervisor
+  restarts it automatically on its own is still unknown, see
+  [platform.md](platform.md#unknowns--not-yet-determined)) - it never deletes or overwrites `/bin/adbd` itself.
+
+Read [recovery.md](recovery.md) in full before using this - it documents exactly which of this project's original
+preconditions for ADB retirement are actually verified at the moment you run this tool (SSH working, right now)
+versus still open (Dropbear surviving a reboot is not implemented yet), so running `disable_adb.sh` today is a
+deliberate, informed relaxation of "wait until every precondition holds," not a claim that the underlying gap is
+already closed.
 
 ## Script-level safety practices
 
