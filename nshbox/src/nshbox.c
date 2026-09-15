@@ -20,7 +20,7 @@
  *
  * Usage:
  *   nshbox --version | -v
- *   nshbox sysinfo
+ *   nshbox sysinfo [--json]
  *   nshbox ps [--json]
  *   nshbox pstree [-a] [pid]
  *   nshbox free
@@ -51,6 +51,9 @@
  *   nshbox sha384sum [file ...]
  *   nshbox sha512sum [file ...]
  *   nshbox md5sum [file ...]
+ *   nshbox base64 [-d] [-u] [-w cols] [file]
+ *   nshbox jwt [--all|--header] [token]
+ *   nshbox json [file]
  *   nshbox ldd [file ...]
  *   nshbox hostname [-f]
  *   nshbox dig [--json] <name> [A|CNAME|MX|TXT]
@@ -94,7 +97,7 @@
 #include <netdb.h>
 
 
-#define NSHBOX_VERSION    "0.4"
+#define NSHBOX_VERSION    "0.5"
 
 
 typedef int (*command_func_t)(int argc, char **argv);
@@ -2782,29 +2785,100 @@ static int cmd_uptime(int argc, char **argv)
     return 0;
 }
 
+/* json_print_string() itself has no missing-value handling of its own
+ * (every existing caller already has a real string in hand) - sysinfo
+ * is the first --json command whose string fields are individually
+ * optional (uname()/proc/cpuinfo entries can legitimately be missing on
+ * a given platform, same as their plain-text "if (x[0])" guards below),
+ * so this wraps it rather than repeating the same check at every one of
+ * sysinfo's own call sites. Falls back to "" rather than null - every
+ * key stays the same JSON type (string) whether or not the underlying
+ * data was found, which is simpler for a consumer to parse than having
+ * to handle a string-or-null union on every one of these fields.
+ * sysinfo's two numeric fields that can also be missing (cpu_cores,
+ * uptime_seconds) fall back to "" too, for the same "no null anywhere
+ * in this output" consistency, rather than 0 - which would look like a
+ * real, if implausible, value instead of an obvious placeholder. */
+static void json_print_string_or_empty(const char *s)
+{
+    json_print_string(s && s[0] ? s : "");
+}
+
 static int cmd_sysinfo(int argc, char **argv)
 {
     struct utsname u;
+    int have_uname;
     FILE *f;
     char model[128];
     char features[256];
     char hardware[128];
     unsigned long cores;
     unsigned long long mem_total, mem_available;
+    double uptime_seconds = 0.0;
+    int have_uptime = 0;
+    int json = 0;
+    int i;
 
-    (void)argc;
-    (void)argv;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--json") == 0) {
+            json = 1;
+        } else {
+            fprintf(stderr, "Usage: nshbox sysinfo [--json]\n");
+            return 2;
+        }
+    }
+
+    have_uname = (uname(&u) == 0);
+
+    read_cpuinfo(model, sizeof(model), features, sizeof(features), hardware, sizeof(hardware), &cores);
+    read_meminfo_kb("MemTotal", &mem_total);
+    read_meminfo_kb("MemAvailable", &mem_available);
+
+    f = fopen("/proc/uptime", "r");
+
+    if (f) {
+        have_uptime = (fscanf(f, "%lf", &uptime_seconds) == 1);
+        fclose(f);
+    }
+
+    if (json) {
+        printf("{\"system\":");
+        json_print_string_or_empty(have_uname ? u.sysname : NULL);
+        printf(",\"node\":");
+        json_print_string_or_empty(have_uname ? u.nodename : NULL);
+        printf(",\"kernel\":");
+        json_print_string_or_empty(have_uname ? u.release : NULL);
+        printf(",\"machine\":");
+        json_print_string_or_empty(have_uname ? u.machine : NULL);
+        printf(",\"hardware\":");
+        json_print_string_or_empty(hardware);
+        printf(",\"cpu\":");
+        json_print_string_or_empty(model);
+        printf(",\"cpu_cores\":");
+        if (cores > 0)
+            printf("%lu", cores);
+        else
+            printf("\"\"");
+        printf(",\"cpu_features\":");
+        json_print_string_or_empty(features);
+        printf(",\"memory_kb\":%llu,\"available_kb\":%llu,\"uptime_seconds\":",
+               mem_total, mem_available);
+        if (have_uptime)
+            printf("%.0f", uptime_seconds);
+        else
+            printf("\"\"");
+        printf("}\n");
+        return 0;
+    }
 
     printf("\nnshbox %s\n\n", NSHBOX_VERSION);
 
-    if (uname(&u) == 0) {
+    if (have_uname) {
         printf("%-15s%s\n", "System:", u.sysname);
         printf("%-15s%s\n", "Node:", u.nodename);
         printf("%-15s%s\n", "Kernel:", u.release);
         printf("%-15s%s\n", "Machine:", u.machine);
     }
-
-    read_cpuinfo(model, sizeof(model), features, sizeof(features), hardware, sizeof(hardware), &cores);
 
     if (hardware[0])
         printf("%-15s%s\n", "Hardware:", hardware);
@@ -2822,25 +2896,14 @@ static int cmd_sysinfo(int argc, char **argv)
 
     printf("\n");
 
-    read_meminfo_kb("MemTotal", &mem_total);
-    read_meminfo_kb("MemAvailable", &mem_available);
-
     printf("%-15s%llu kB\n", "Memory:", mem_total);
     printf("%-15s%llu kB\n", "Available:", mem_available);
 
-    f = fopen("/proc/uptime", "r");
+    if (have_uptime) {
+        char uptime_str[32];
 
-    if (f) {
-        double uptime;
-
-        if (fscanf(f, "%lf", &uptime) == 1) {
-            char uptime_str[32];
-
-            format_uptime(uptime, uptime_str, sizeof(uptime_str));
-            printf("%-15s%s\n", "Uptime:", uptime_str);
-        }
-
-        fclose(f);
+        format_uptime(uptime_seconds, uptime_str, sizeof(uptime_str));
+        printf("%-15s%s\n", "Uptime:", uptime_str);
     }
 
     printf("\n");
@@ -6499,6 +6562,482 @@ static int cmd_md5sum(int argc, char **argv)
 
 
 /* ------------------------------------------------------------------ */
+/* base64                                                             */
+/* ------------------------------------------------------------------ */
+
+static const char base64_std_alphabet[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char base64_url_alphabet[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+static int base64_encode_stream(FILE *in, FILE *out, long wrap, const char *alphabet)
+{
+    unsigned char in3[3];
+    size_t n;
+    long col = 0;
+
+    while ((n = fread(in3, 1, 3, in)) > 0) {
+        unsigned char out4[4];
+        unsigned int triple = (unsigned int)in3[0] << 16;
+        int i;
+
+        if (n > 1)
+            triple |= (unsigned int)in3[1] << 8;
+        if (n > 2)
+            triple |= (unsigned int)in3[2];
+
+        out4[0] = (unsigned char)alphabet[(triple >> 18) & 0x3f];
+        out4[1] = (unsigned char)alphabet[(triple >> 12) & 0x3f];
+        out4[2] = (n > 1) ? (unsigned char)alphabet[(triple >> 6) & 0x3f] : (unsigned char)'=';
+        out4[3] = (n > 2) ? (unsigned char)alphabet[triple & 0x3f] : (unsigned char)'=';
+
+        for (i = 0; i < 4; i++) {
+            putc(out4[i], out);
+            col++;
+            if (wrap > 0 && col == wrap) {
+                putc('\n', out);
+                col = 0;
+            }
+        }
+    }
+
+    if (ferror(in))
+        return 1;
+
+    if (wrap > 0 && col != 0)
+        putc('\n', out);
+
+    return 0;
+}
+
+static int base64_decode_value(unsigned char c, int url_safe)
+{
+    if (c >= 'A' && c <= 'Z')
+        return c - 'A';
+    if (c >= 'a' && c <= 'z')
+        return c - 'a' + 26;
+    if (c >= '0' && c <= '9')
+        return c - '0' + 52;
+
+    if (url_safe) {
+        if (c == '-') return 62;
+        if (c == '_') return 63;
+    } else {
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+    }
+
+    return -1;
+}
+
+static void base64_emit_group(const unsigned char group[4], int pad, FILE *out)
+{
+    unsigned int triple = ((unsigned int)group[0] << 18) |
+                           ((unsigned int)group[1] << 12) |
+                           ((unsigned int)group[2] << 6) |
+                           (unsigned int)group[3];
+
+    putc((int)((triple >> 16) & 0xff), out);
+    if (pad < 2)
+        putc((int)((triple >> 8) & 0xff), out);
+    if (pad < 1)
+        putc((int)(triple & 0xff), out);
+}
+
+/* Tolerates a final group with no explicit "=" padding at all (2 or 3
+ * leftover symbols at EOF) as well as one that does carry it - the former
+ * is how base64url is used in practice (JWTs, see cmd_jwt below), and
+ * treating both the same way here means jwt_decode_segment() below needs
+ * no separate decoder. A lone leftover symbol (count == 1) is never valid
+ * in either form. */
+static int base64_decode_stream(FILE *in, FILE *out, int url_safe)
+{
+    unsigned char group[4];
+    int count = 0;
+    int pad = 0;
+    int c;
+
+    while ((c = getc(in)) != EOF) {
+        if (c == '\n' || c == '\r')
+            continue;
+
+        if (c == '=') {
+            group[count++] = 0;
+            pad++;
+        } else {
+            int v = base64_decode_value((unsigned char)c, url_safe);
+
+            if (v < 0) {
+                fprintf(stderr, "base64: invalid input\n");
+                return 1;
+            }
+            group[count++] = (unsigned char)v;
+        }
+
+        if (count == 4) {
+            base64_emit_group(group, pad, out);
+            count = 0;
+            pad = 0;
+        }
+    }
+
+    if (ferror(in))
+        return 1;
+
+    if (count == 1) {
+        fprintf(stderr, "base64: invalid input (truncated)\n");
+        return 1;
+    }
+
+    if (count > 0) {
+        pad += (4 - count);
+        while (count < 4)
+            group[count++] = 0;
+        base64_emit_group(group, pad, out);
+    }
+
+    return 0;
+}
+
+static int cmd_base64(int argc, char **argv)
+{
+    static const char usage[] = "Usage: nshbox base64 [-d] [-u] [-w cols] [file]\n";
+    int decode = 0;
+    int url_safe = 0;
+    long wrap = 76;
+    int argi = 1;
+    FILE *in = stdin;
+    int rc;
+
+    while (argi < argc && argv[argi][0] == '-' && argv[argi][1]) {
+        if (!strcmp(argv[argi], "--")) {
+            argi++;
+            break;
+        } else if (!strcmp(argv[argi], "-d")) {
+            decode = 1;
+            argi++;
+        } else if (!strcmp(argv[argi], "-u")) {
+            url_safe = 1;
+            argi++;
+        } else if (!strncmp(argv[argi], "-w", 2)) {
+            /* Accepts both "-w cols" and the attached "-wcols" form (e.g.
+             * "-w0") - real base64/basenc accept both via getopt, and
+             * "-w0" specifically is the idiom most people actually type
+             * for "no wrapping". */
+            const char *val = argv[argi][2] ? argv[argi] + 2 : NULL;
+            char *end;
+            int consumed = 1;
+
+            if (!val) {
+                if (argi + 1 >= argc) {
+                    fprintf(stderr, "%s", usage);
+                    return 2;
+                }
+                val = argv[argi + 1];
+                consumed = 2;
+            }
+
+            errno = 0;
+            wrap = strtol(val, &end, 10);
+            if (errno || *end || wrap < 0) {
+                fprintf(stderr, "%s", usage);
+                return 2;
+            }
+            argi += consumed;
+        } else {
+            fprintf(stderr, "%s", usage);
+            return 2;
+        }
+    }
+
+    if (argi < argc) {
+        in = fopen(argv[argi], "rb");
+        if (!in) {
+            perror(argv[argi]);
+            return 1;
+        }
+        argi++;
+    }
+
+    if (argi != argc) {
+        fprintf(stderr, "%s", usage);
+        if (in != stdin)
+            fclose(in);
+        return 2;
+    }
+
+    if (decode)
+        rc = base64_decode_stream(in, stdout, url_safe);
+    else
+        rc = base64_encode_stream(in, stdout, wrap, url_safe ? base64_url_alphabet : base64_std_alphabet);
+
+    if (in != stdin)
+        fclose(in);
+
+    return rc;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* jwt                                                                */
+/* ------------------------------------------------------------------ */
+
+/* Decodes one '.'-delimited JWT segment (always base64url, see RFC 7519)
+ * straight to stdout via fmemopen() + the same base64_decode_stream()
+ * used by "base64 -u" - no separate decoder to keep in sync. Does not
+ * verify anything: JWT segments are just base64url(JSON), and printing
+ * the decoded header/payload here is strictly a read-only convenience
+ * for inspecting a token without pasting it into an external site. */
+static int jwt_decode_segment(const char *seg, size_t len)
+{
+    FILE *in;
+    int rc;
+
+    in = fmemopen((void *)seg, len, "r");
+    if (!in) {
+        perror("fmemopen");
+        return 1;
+    }
+
+    rc = base64_decode_stream(in, stdout, 1);
+    fclose(in);
+    putchar('\n');
+    return rc;
+}
+
+static int cmd_jwt(int argc, char **argv)
+{
+    static const char usage[] = "Usage: nshbox jwt [--all|--header] [token]\n";
+    char *line = NULL;
+    size_t cap = 0;
+    const char *token;
+    const char *dot1, *dot2;
+    int rc = 0;
+    int argi = 1;
+    /* Default: payload only - the claims are almost always what someone
+     * actually wants to glance at; --header/--all opt into the rest. */
+    int show_header = 0;
+    int show_payload = 1;
+
+    if (argi < argc && !strcmp(argv[argi], "--all")) {
+        show_header = 1;
+        argi++;
+    } else if (argi < argc && !strcmp(argv[argi], "--header")) {
+        show_header = 1;
+        show_payload = 0;
+        argi++;
+    }
+
+    if (argc - argi > 1) {
+        fprintf(stderr, "%s", usage);
+        return 2;
+    }
+
+    if (argi < argc) {
+        token = argv[argi];
+    } else {
+        /* Prefer stdin over an argv token where possible - an argument
+         * lands in the process's own /proc/<pid>/cmdline and in "ps"
+         * output for as long as this process runs, visible to any other
+         * user who can see the process table; stdin does not. */
+        ssize_t len = getline(&line, &cap, stdin);
+
+        if (len < 0) {
+            free(line);
+            fprintf(stderr, "jwt: no input\n");
+            return 1;
+        }
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+        token = line;
+    }
+
+    dot1 = strchr(token, '.');
+    dot2 = dot1 ? strchr(dot1 + 1, '.') : NULL;
+
+    if (!dot1 || !dot2) {
+        fprintf(stderr, "jwt: not a JWT (expected header.payload.signature)\n");
+        free(line);
+        return 1;
+    }
+
+    if (show_header && jwt_decode_segment(token, (size_t)(dot1 - token)) != 0)
+        rc = 1;
+    if (show_payload && jwt_decode_segment(dot1 + 1, (size_t)(dot2 - dot1 - 1)) != 0)
+        rc = 1;
+
+    free(line);
+    return rc;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* json (pretty-printer)                                              */
+/* ------------------------------------------------------------------ */
+
+#define JSON_MAX_DEPTH 256
+
+static void json_print_indent(FILE *out, int depth)
+{
+    int i;
+
+    for (i = 0; i < depth; i++)
+        fputs("  ", out);
+}
+
+/* Called just before writing any significant, non-structural token (a
+ * string's opening quote, a number/true/false/null character, or a
+ * nested '{'/'[') - if nothing has been written inside the innermost
+ * open container yet, this writes the newline+indent that goes before
+ * its first entry and marks the container non-empty, so its own closing
+ * bracket later knows to go on its own line too rather than folding
+ * back onto the opener (see the '}'/']' case in json_pretty_print()). */
+static void json_before_token(FILE *out, int *need_indent, int depth)
+{
+    if (depth == 0)
+        return;
+
+    if (need_indent[depth - 1]) {
+        putc('\n', out);
+        json_print_indent(out, depth);
+        need_indent[depth - 1] = 0;
+    }
+}
+
+/* Reformats one JSON document read from "in" into indented, human-
+ * readable form written to "out" - a single-pass bracket-tracking
+ * reformatter, not a full parser: it does not validate number syntax or
+ * string escape correctness, only tracks string boundaries (so a brace
+ * or comma inside a string is never mistaken for structure) and
+ * container nesting depth. That is enough to correctly pretty-print
+ * anything nshbox's own --json commands emit, or any other well-formed
+ * JSON piped in from elsewhere - see cmd_json() below, the standalone
+ * command this backs. Kept as one shared, reusable function rather than
+ * inlined into cmd_json() specifically so a future "--json but pretty"
+ * variant of ps/du/find/dig/nslookup/uptime's own --json output could
+ * call this same function on their already-built output instead of a
+ * second implementation - not wired up yet, see nshbox/README.md.
+ * Two spaces per indent level, matching this project's own C source
+ * style. Returns 0 on success, 1 if the brackets in the input are
+ * unbalanced (missing/extra '}'/']') or nesting exceeds
+ * JSON_MAX_DEPTH - either way, whatever was already written stands as
+ * a best-effort partial result, not rolled back. */
+static int json_pretty_print(FILE *in, FILE *out)
+{
+    int need_indent[JSON_MAX_DEPTH];
+    int depth = 0;
+    int in_string = 0;
+    int escape = 0;
+    int c;
+
+    while ((c = getc(in)) != EOF) {
+        if (in_string) {
+            putc(c, out);
+            if (escape)
+                escape = 0;
+            else if (c == '\\')
+                escape = 1;
+            else if (c == '"')
+                in_string = 0;
+            continue;
+        }
+
+        if (isspace(c))
+            continue;
+
+        switch (c) {
+        case '"':
+            json_before_token(out, need_indent, depth);
+            putc(c, out);
+            in_string = 1;
+            break;
+
+        case '{':
+        case '[':
+            json_before_token(out, need_indent, depth);
+            if (depth >= JSON_MAX_DEPTH) {
+                fprintf(stderr, "json: nesting too deep (max %d)\n", JSON_MAX_DEPTH);
+                return 1;
+            }
+            putc(c, out);
+            need_indent[depth] = 1;
+            depth++;
+            break;
+
+        case '}':
+        case ']':
+            if (depth == 0) {
+                fprintf(stderr, "json: unmatched '%c'\n", c);
+                return 1;
+            }
+            depth--;
+            if (!need_indent[depth]) {
+                putc('\n', out);
+                json_print_indent(out, depth);
+            }
+            putc(c, out);
+            break;
+
+        case ',':
+            putc(c, out);
+            if (depth > 0)
+                need_indent[depth - 1] = 1;
+            break;
+
+        case ':':
+            putc(c, out);
+            putc(' ', out);
+            break;
+
+        default:
+            json_before_token(out, need_indent, depth);
+            putc(c, out);
+            break;
+        }
+    }
+
+    putc('\n', out);
+
+    if (ferror(in))
+        return 1;
+
+    if (depth != 0) {
+        fprintf(stderr, "json: unexpected end of input (%d unclosed container(s))\n", depth);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int cmd_json(int argc, char **argv)
+{
+    static const char usage[] = "Usage: nshbox json [file]\n";
+    FILE *in = stdin;
+    int rc;
+
+    if (argc > 2) {
+        fprintf(stderr, "%s", usage);
+        return 2;
+    }
+
+    if (argc == 2) {
+        in = fopen(argv[1], "r");
+        if (!in) {
+            perror(argv[1]);
+            return 1;
+        }
+    }
+
+    rc = json_pretty_print(in, stdout);
+
+    if (in != stdin)
+        fclose(in);
+
+    return rc;
+}
+
+
+/* ------------------------------------------------------------------ */
 /* ldd                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -6533,7 +7072,7 @@ static int cmd_ldd(int argc, char **argv)
 static int cmd_install(int argc, char **argv);
 
 static const command_t commands[] = {
-    { "sysinfo",  cmd_sysinfo,  "Show system/CPU/memory information" },
+    { "sysinfo",  cmd_sysinfo,  "Show system/CPU/memory information [--json]" },
     { "ps",       cmd_ps,       "Show processes [--json]" },
     { "pstree",   cmd_pstree,   "Show process tree, box-drawing by default (-a plain) [pid]" },
     { "free",     cmd_free,     "Show memory information" },
@@ -6561,13 +7100,16 @@ static const command_t commands[] = {
     { "du",       cmd_du,       "Show disk usage (-h -s -b) [--json]" },
     { "find",     cmd_find,     "Search a directory tree (-name -type -maxdepth) [--json]" },
     { "tree",     cmd_tree,     "Show a directory tree, box-drawing style [-L level] [path]" },
-    { "tar",      cmd_tar,      "Create/extract/list a ustar archive (-c|-x|-t[zv] -f archive [-C dir] [path ...]; -z or .tar.gz/.tgz/.taz via gzip in PATH; -v lists names to stderr; extract/list can name specific members)" },
+    { "tar",      cmd_tar,      "Create/extract/list a ustar archive (-cxt[zv] -f archive [-C dir] [path ...])" },
     { "iotest",   cmd_iotest,   "Sequential read/write throughput test (-w file size|-t s|-n N [cap] | -r file)" },
     { "sha256sum",cmd_sha256sum,"Print SHA-256 checksums" },
     { "sha1sum",  cmd_sha1sum,  "Print SHA-1 checksums" },
     { "sha384sum",cmd_sha384sum,"Print SHA-384 checksums" },
     { "sha512sum",cmd_sha512sum,"Print SHA-512 checksums" },
     { "md5sum",   cmd_md5sum,   "Print MD5 checksums" },
+    { "base64",   cmd_base64,   "Base64 encode/decode (-d decode, -u URL-safe alphabet, -w cols wrap, 0 = no wrap) [file]" },
+    { "jwt",      cmd_jwt,      "Decode a JWT's payload (--header for header, --all for both) - no signature verification [token]" },
+    { "json",     cmd_json,     "Pretty-print JSON, 2-space indent [file]" },
     { "ldd",      cmd_ldd,      "List a binary's shared library dependencies" },
     { "hostname", cmd_hostname, "Print the system hostname (-f fully-qualified)" },
     { "dig",      cmd_dig,      "DNS lookup [--json] [name] [A|CNAME|MX|TXT]" },
@@ -6696,9 +7238,20 @@ static int cmd_install(int argc, char **argv)
 }
 
 
+static int compare_command_names(const void *a, const void *b)
+{
+    const command_t *ca = *(const command_t * const *)a;
+    const command_t *cb = *(const command_t * const *)b;
+
+    return strcmp(ca->name, cb->name);
+}
+
 static void usage(void)
 {
     const command_t *cmd;
+    const command_t *sorted[sizeof(commands) / sizeof(commands[0]) - 1];
+    size_t count = 0;
+    size_t i;
 
     printf(
         "\nnshbox %s - tiny Linux toolbox\n\n",
@@ -6710,14 +7263,26 @@ static void usage(void)
 
     printf("Commands:\n");
 
+    /* Printed alphabetically for easy scanning - commands[] itself stays
+     * grouped by theme in source order (checksums together, DNS commands
+     * together, base64/jwt/json together, ...), which is more readable
+     * when working on the code; only the display order differs here.
+     * "install" is excluded from this list and shown in its own "Setup:"
+     * section below instead, since it changes the filesystem rather than
+     * reading/reporting anything, unlike every other command here. */
     for (cmd = commands; cmd->name; cmd++) {
         if (strcmp(cmd->name, "install") == 0)
             continue;
+        sorted[count++] = cmd;
+    }
 
+    qsort(sorted, count, sizeof(sorted[0]), compare_command_names);
+
+    for (i = 0; i < count; i++) {
         printf(
             "  %-13s %s\n",
-            cmd->name,
-            cmd->help
+            sorted[i]->name,
+            sorted[i]->help
         );
     }
 
@@ -6735,6 +7300,87 @@ static void usage(void)
     }
 
     printf("\n");
+}
+
+
+/* ------------------------------------------------------------------ */
+/* dispatch                                                           */
+/* ------------------------------------------------------------------ */
+
+/* "--JSON"/"--Json" is an opt-in pretty-printed variant of whichever
+ * --json a command already supports (ps/du/find/dig/nslookup/uptime) -
+ * reusing json_pretty_print() rather than teaching each of those
+ * commands its own separate pretty-printing path. Rewrites the matched
+ * argv entry to "--json" in place, so the target command's own,
+ * unchanged, already-tested arg parser sees exactly the flag it already
+ * understands, then captures everything that command writes to stdout
+ * via open_memstream() (glibc's/POSIX's stdout is a real, reassignable
+ * FILE* global, not just an opaque macro - this is standard, portable
+ * behavior on this project's actual target platforms, not a hack
+ * specific to one libc) instead of letting it reach the terminal
+ * directly, and re-emits the captured output pretty-printed once the
+ * command has finished. A command that does not understand --json at
+ * all just gets its own normal "unrecognized option" from --json.
+ *
+ * One accepted tradeoff: this rewrite happens before the target
+ * command ever sees its own argv, so a literal "--JSON"/"--Json" meant as
+ * a genuine argument to some other command (e.g. a grep pattern) would
+ * be misread as this flag instead - accepted because both spellings are
+ * unusual enough in practice, and opt-in, to not be worth a per-command
+ * allowlist here - see nshbox/README.md. */
+static int dispatch_command(const command_t *cmd, int argc, char **argv)
+{
+    int i;
+    int pretty = 0;
+    FILE *captured;
+    char *buf = NULL;
+    size_t buf_len = 0;
+    FILE *real_stdout;
+    int rc;
+
+    for (i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--JSON") || !strcmp(argv[i], "--Json")) {
+            argv[i] = (char *)"--json";
+            pretty = 1;
+        }
+    }
+
+    if (!pretty)
+        return cmd->func(argc, argv);
+
+    captured = open_memstream(&buf, &buf_len);
+    if (!captured) {
+        perror("open_memstream");
+        return 1;
+    }
+
+    fflush(stdout);
+    real_stdout = stdout;
+    stdout = captured;
+
+    rc = cmd->func(argc, argv);
+
+    fflush(stdout);
+    stdout = real_stdout;
+    fclose(captured);
+
+    if (buf_len > 0) {
+        FILE *in = fmemopen(buf, buf_len, "r");
+
+        if (!in) {
+            perror("fmemopen");
+            rc = rc ? rc : 1;
+        } else {
+            int pretty_rc = json_pretty_print(in, stdout);
+
+            fclose(in);
+            if (rc == 0)
+                rc = pretty_rc;
+        }
+    }
+
+    free(buf);
+    return rc;
 }
 
 
@@ -6780,7 +7426,7 @@ int main(int argc, char **argv)
 
     for (cmd = commands; cmd->name; cmd++) {
         if (strcmp(name, cmd->name) == 0)
-            return cmd->func(argc, argv);
+            return dispatch_command(cmd, argc, argv);
     }
 
     fprintf(

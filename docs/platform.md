@@ -147,17 +147,24 @@ bootstrap/mount:
   unreliable on this device - see `push_etc_override()` in `install/common.sh`). Harmless to always overwrite:
   `setup_etc.sh` below only ever copies a given staged file into `/data/etc` the first time THAT file is missing
   there, so a later edit to the staging copy on the host has no effect once a device has already picked it up.
+  `resolv.conf` specifically also has a second, per-deployment override that does not touch this repository file at
+  all: `DNS_SERVERS` (space-separated IPs) in `config/tc002-tools.conf` - see `push_resolv_conf()` in
+  `install/install_etc.sh` and `config/tc002-tools.conf.example`.
 - **Bootstrap + mounting**: `runtime/setup_etc.sh` - a small standalone on-device script, called automatically by
   `sshd.sh` before it starts Dropbear, but also runnable on its own (e.g. to inspect or re-verify without touching
   Dropbear at all), and also run directly by `install/install_etc.sh` right after staging (so a newly-added
   override reaches an already-running device without needing a Dropbear restart - see its own comments). The first
   time it runs (detected by `/data/etc` not existing yet), it copies the device's entire live `/etc` into
-  `/data/etc`. Every run after that (including the first), it applies each of `passwd`/`group`/`resolv.conf`
-  (mandatory) and the CA bundle (optional) from `/data/etc-overrides/` into that copy, but only for a file not
-  already there, then bind-mounts `/data/etc` back over `/etc` if not already mounted. Only the mount is
-  redone every run - the copy under `/data/etc` persists across reboots, and an admin's later edits to the live
-  `/etc/passwd` (over SSH) land there and persist too, since that file is already considered "applied" and will
-  not be overwritten by a later `setup_etc.sh` run.
+  `/data/etc` - then immediately deletes the just-copied `resolv.conf` from that copy specifically (found the hard
+  way: the device's own `/etc` already has a - broken - `resolv.conf`, so leaving the bootstrap copy's version in
+  place would satisfy the "only if not already there" override check below on the very first run and this
+  project's own `resolv.conf` would never actually get applied at all; `passwd`/`group` never had this problem
+  because the device genuinely has neither to begin with). Every run after that (including the first), it applies
+  each of `passwd`/`group`/`resolv.conf` (mandatory) and the CA bundle (optional) from `/data/etc-overrides/` into
+  that copy, but only for a file not already there, then bind-mounts `/data/etc` back over `/etc` if not already
+  mounted. Only the mount is redone every run - the copy under `/data/etc` persists across reboots, and an admin's
+  later edits to the live `/etc/passwd` (over SSH) land there and persist too, since that file is already
+  considered "applied" and will not be overwritten by a later `setup_etc.sh` run.
 
 This used to be two separate host-driven `adb push` scripts (one for passwd/group, one for resolv.conf) that both
 had to be re-run by hand after every power cycle just to redo the mount; now only `sshd.sh` (which calls

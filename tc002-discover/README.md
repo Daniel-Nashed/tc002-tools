@@ -76,6 +76,15 @@ Two ways around the broadcast limitation itself: Windows 11 22H2+'s `networkingM
 `.wslconfig` (WSL then shares the host's real network stack instead of sitting behind NAT), or simplest - run a
 first discovery from a real Windows terminal, then let WSL use the resulting cache from then on.
 
+That first-discovery-elsewhere workaround needs a *second* machine on the same LAN, though - if WSL is genuinely the
+only place this ever runs, there is no other machine to seed this tool's own cache with. `../install/discover_device.sh`
+(the wrapper `tc002_setup.sh`/`tc002_start.sh` actually call) has its own, independent fallback for exactly that
+case: once one manually-entered IP has been confirmed reachable and written to `config/tc002-tools.conf`, every
+later run tries that remembered `DEVICE_IP` first (verified with a real `adb connect`, not trusted blindly) before
+falling back to prompting again - see its own `--help`. That is a separate mechanism from this tool's own cache
+above, at the shell-script layer rather than in `tc002-discover` itself, since it is this project's own config file
+being remembered, not something `tc002-discover` (a general-purpose, standalone discovery tool) needs to know about.
+
 ## Static, against musl
 
 `build/build_tc002-discover.sh` builds with exactly the command documented in `tc002-discover.c`'s own header

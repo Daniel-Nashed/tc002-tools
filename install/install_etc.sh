@@ -9,7 +9,10 @@
 #     INSTALL_PREFIX/bin/setup_etc.sh
 #   - runtime/etc/{passwd,group,resolv.conf} - real, customizable-before-
 #     you-deploy files in this repository - to INSTALL_PREFIX/etc-overrides/
-#     as staged defaults
+#     as staged defaults. resolv.conf specifically also has a second,
+#     per-deployment override: DNS_SERVERS in the config file, which
+#     generates its content instead of pushing the repo file as-is - see
+#     push_resolv_conf() below and tc002-tools.conf.example.
 #   - the CA trust bundle built by build/build_ca_bundle.sh to
 #     INSTALL_PREFIX/etc-overrides/ssl/certs/ca-certificates.crt - curl
 #     needs it on every invocation (see runtime/on-demand-run.sh's
@@ -76,6 +79,11 @@ copied in the first time IT is missing there, so an admin's later edit to
 an already-applied file (e.g. /etc/passwd, over SSH) persists across
 every later run.
 
+DNS_SERVERS in the config file (space-separated IPs) overrides what gets
+pushed for resolv.conf specifically - set it to change nameservers for
+one deployment without editing runtime/etc/resolv.conf in the repo. Leave
+it blank (the default) to push that file as-is.
+
   --device SERIAL   ADB device serial (overrides DEVICE from config).
   --config FILE     Config file (default: config/tc002-tools.conf).
   -h, --help        Show this help.
@@ -133,10 +141,43 @@ push_etc_defaults()
 {
   local name
 
-  for name in passwd group resolv.conf
+  for name in passwd group
   do
     push_etc_override "$name" "${REPO_ROOT}/runtime/etc/${name}"
   done
+
+  push_resolv_conf
+}
+
+# resolv.conf gets its own function, not the plain loop above, because it
+# has a second source: DNS_SERVERS in the config file (see
+# tc002-tools.conf.example), for setting nameservers per-deployment
+# without editing a tracked repo file. Empty (the default) falls back to
+# pushing runtime/etc/resolv.conf as-is, same as passwd/group above -
+# still the place to change what ships when nobody overrides it via
+# config. A non-empty DNS_SERVERS always wins over that file - generates
+# "nameserver <ip>" lines into a throwaway temp file and pushes that
+# instead, entirely gitignored/local, so a real deployment's DNS choice
+# never needs to touch anything tracked by git.
+push_resolv_conf()
+{
+  local generated ip
+
+  if [ -z "$DNS_SERVERS" ]; then
+    push_etc_override "resolv.conf" "${REPO_ROOT}/runtime/etc/resolv.conf"
+    return
+  fi
+
+  generated="$(mktemp)"
+
+  for ip in $DNS_SERVERS
+  do
+    echo "nameserver ${ip}"
+  done >"$generated"
+
+  log "using DNS_SERVERS from ${CONFIG_FILE} instead of runtime/etc/resolv.conf: ${DNS_SERVERS}"
+  push_etc_override "resolv.conf" "$generated"
+  rm -f "$generated"
 }
 
 # The CA bundle is its own build step (build/build_ca_bundle.sh), NOT part

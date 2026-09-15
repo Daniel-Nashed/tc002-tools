@@ -19,8 +19,8 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 
 | Command | Mutates state? | What it does |
 | --- | --- | --- |
-| `nshbox sysinfo` | no | System/CPU/memory info: `uname`, `/proc/cpuinfo`, memory, uptime - see below. |
-| `nshbox ps [--json]` | no | List PIDs with PPID, RSS memory, CPU time, and command line, from `/proc` (or a JSON array). |
+| `nshbox sysinfo [--json\|--JSON]` | no | System/CPU/memory info: `uname`, `/proc/cpuinfo`, memory, uptime (or a JSON object, compact or pretty) - see below. |
+| `nshbox ps [--json\|--JSON]` | no | List PIDs with PPID, RSS memory, CPU time, and command line, from `/proc` (`--json` for a compact JSON array, `--JSON`/`--Json` for pretty-printed - see `json` below). |
 | `nshbox pstree [pid]` | no | Process tree by PID/PPID, rooted at PID 1 (or `pid`). |
 | `nshbox free` | no | Dump `/proc/meminfo` as-is. |
 | `nshbox vmstat [delay [count]]` | no | procs/memory/swap/io/system/cpu stats, `vmstat`-style - see below. |
@@ -43,9 +43,9 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 | `nshbox which <command> [...]` | no | Locate an executable in `$PATH`. |
 | `nshbox clear` | no | Clear the terminal (writes an escape sequence to stdout only). |
 | `nshbox sleep <seconds>` | no | Sleep for (fractional) seconds - see below. |
-| `nshbox uptime [--json]` | no | Current time, uptime, load average (or a JSON object) - see below. |
-| `nshbox du [-hsb] [--json] [path ...]` | no | Recursive disk usage, `du`-style (or a JSON array of `{path,bytes}`). |
-| `nshbox find [path ...] [-name pat] [-type f\|d\|l] [-maxdepth n] [--json]` | no | Search a directory tree (or a JSON array of `{path,type,size,uid,gid}`). |
+| `nshbox uptime [--json\|--JSON]` | no | Current time, uptime, load average (or a JSON object, compact or pretty) - see below. |
+| `nshbox du [-hsb] [--json\|--JSON] [path ...]` | no | Recursive disk usage, `du`-style (or a JSON array of `{path,bytes}`, compact or pretty). |
+| `nshbox find [path ...] [-name pat] [-type f\|d\|l] [-maxdepth n] [--json\|--JSON]` | no | Search a directory tree (or a JSON array of `{path,type,size,uid,gid}`, compact or pretty). |
 | `nshbox tree [-L level] [path]` | no | Directory tree, box-drawing style (same connectors as `pstree`'s fancy renderer); shows symlink targets, `-L` caps display depth - see below. |
 | `nshbox tar -c\|-x\|-t[zv] -f archive [-C dir] [path ...]` | **yes** (`-c`/`-x` only) | ustar archive; `-z`/`.tar.gz`/`.tgz`/`.taz` via `gzip` in `PATH`; `-v` lists names to stderr; extract/list can name specific members - see below. |
 | `nshbox iotest -w <file> <size>` / `-r <file>` | **yes** | Sequential storage throughput test - see below. |
@@ -54,10 +54,13 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 | `nshbox sha384sum [file ...]` | no | SHA-384 checksums, coreutils-output-compatible. |
 | `nshbox sha512sum [file ...]` | no | SHA-512 checksums, coreutils-output-compatible. |
 | `nshbox md5sum [file ...]` | no | MD5 checksums, coreutils-output-compatible. |
+| `nshbox base64 [-d] [-u] [-w cols] [file]` | no | Base64 encode/decode; `-u` for the URL-safe alphabet, `-w` to change/disable line-wrapping - see below. |
+| `nshbox jwt [--all\|--header] [token]` | no | Decode a JWT's payload (`--header` for header, `--all` for both) as raw JSON - no signature verification - see below. |
+| `nshbox json [file]` | no | Pretty-print JSON, 2-space indent - reads stdin or a file; also available as `--JSON`/`--Json` on any command above that supports `--json` - see below. |
 | `nshbox ldd [file ...]` | no | List a binary's shared library dependencies. |
 | `nshbox hostname [-f]` | no | Print the system hostname; `-f` resolves it to a fully-qualified name via `/etc/hosts`/DNS. |
-| `nshbox dig [--json] <name> [A\|CNAME\|MX\|TXT]` | no | DNS lookup, `dig`-style simplified ANSWER SECTION output (or a JSON array) - see below. |
-| `nshbox nslookup [--json] [-type=A\|CNAME\|MX\|TXT] <name>` | no | DNS lookup, `nslookup`-style output (or a JSON array) - see below. |
+| `nshbox dig [--json\|--JSON] <name> [A\|CNAME\|MX\|TXT]` | no | DNS lookup, `dig`-style simplified ANSWER SECTION output (or a JSON array, compact or pretty) - see below. |
+| `nshbox nslookup [--json\|--JSON] [-type=A\|CNAME\|MX\|TXT] <name>` | no | DNS lookup, `nslookup`-style output (or a JSON array, compact or pretty) - see below. |
 | `nshbox install [-f] [-q]` | **yes** | Create BusyBox-style applet symlinks - see below. |
 
 Four commands mutate device state: `install` (creates symlinks in its own directory), `tee` (writes files when
@@ -145,7 +148,7 @@ independently rather than sharing a flag whose meaning would subtly differ betwe
 
 ```text
 
-nshbox 0.4
+nshbox 0.5
 
 System:        Linux
 Node:          flythings
@@ -173,6 +176,15 @@ shorter, vaguer name became established. Sourced entirely from `/proc` and `unam
 first `model name` line verbatim - not a friendlier marketing name like "ARM Cortex-A7", since that isn't literally
 in `/proc/cpuinfo` and would need a hardcoded ARM-part-ID lookup table to produce), and `Memory`/`Available`/
 `Uptime` from `/proc/meminfo` and `/proc/uptime`. Any field not found is simply omitted rather than printed empty.
+
+`--json` emits the same fields as one flat object (`{"system":...,"node":...,"kernel":...,"machine":...,
+"hardware":...,"cpu":...,"cpu_cores":...,"cpu_features":...,"memory_kb":...,"available_kb":...,
+"uptime_seconds":...}`) - unlike the plain-text view, a field that could not be found is not omitted here, so
+scripts parsing this can rely on every key always being present. Every field, string or numeric, falls back to
+`""` when missing - deliberately never `null` (no key in this output needs a string-or-null, or number-or-null,
+union to parse) and never `0` for the numeric fields (`cpu_cores`, `uptime_seconds`) either, since `0` would look
+like a real, if implausible, value rather than an obvious placeholder. `--JSON`/`--Json` pretty-print any of this,
+same as every other `--json`-supporting command - see `json` above.
 
 There is deliberately no `CPU clock` field yet: getting it would need a device-tree `clock-frequency` lookup outside
 `/proc` (confirmed on the real device: `/proc/cpuinfo` has no `cpu MHz` line at all, unlike x86), and that source is
@@ -303,7 +315,7 @@ OpenSSL" below - and `sleep`, confirmed directly (2026-09-13) via `runtime/sshd.
 `nshbox sleep SECONDS` supports fractional seconds via `nanosleep()` - a minimal, single-argument implementation,
 not attempting GNU `sleep`'s multiple-argument summing or `5m`/`2h` unit suffixes, since nothing here needs them.
 
-`nshbox uptime [--json]` prints current time, uptime (`/proc/uptime`), and load average (`/proc/loadavg`) in a
+`nshbox uptime [--json|--JSON]` prints current time, uptime (`/proc/uptime`), and load average (`/proc/loadavg`) in a
 `uptime`-like format (or a JSON object: `{"time":...,"uptime_seconds":...,"load_average":{"1min":...,...}}`).
 Deliberately omits the logged-in-user count real `uptime` shows - this device has no working `utmp` to read one
 from (an Android-derived environment, not a traditional multi-user login setup), and fabricating a number would be
@@ -452,7 +464,8 @@ either one emits the exact same JSON array shape (`[{"name":...,"ttl":...,"type"
 no reason for the two commands' machine-readable output to disagree just because their plain-text output does. The
 flag can appear anywhere among the other arguments (`dig --json example.com MX` and `dig example.com --json MX`
 both work). On a failed or empty lookup, `--json` still prints a valid `[]` to stdout - success/failure is signaled
-the normal way, via the exit code and an stderr message, not by stdout being unparseable.
+the normal way, via the exit code and an stderr message, not by stdout being unparseable. `--JSON`/`--Json` work
+here too, exactly like on every other `--json`-supporting command - see `json` below.
 
 Queries go through glibc's own stub resolver (`res_query()`, then `ns_initparse()`/`ns_parserr()` to walk the
 answer section, `dn_expand()` to decode compressed domain names in `CNAME`/`MX` records) rather than a hand-rolled
@@ -474,6 +487,86 @@ including a real CNAME chain (`www.wikipedia.org` -> `dyna.wikimedia.org`) and a
 (`gmail.com`, five servers with correct priorities). `example.com`'s own MX record showing priority `0` with an
 empty target on first look seemed like a bug - turned out to be `example.com`'s real, correct "null MX" record
 (RFC 7505: explicitly advertises that the domain accepts no mail), not a parsing error.
+
+## base64 and jwt
+
+```sh
+nshbox base64 <file           # encode, wrapped at 76 cols (like real base64)
+nshbox base64 -d <file.b64    # decode
+nshbox base64 -u -w 0 <file   # URL-safe alphabet (RFC 4648 sec. 5), no line wrapping
+nshbox jwt "$TOKEN"           # decode a JWT's payload
+nshbox jwt --header "$TOKEN"  # header only
+nshbox jwt --all "$TOKEN"     # header then payload
+```
+
+```text
+$ nshbox jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+{"sub":"1234567890","name":"John Doe","iat":1516239022}
+```
+
+`base64` is a from-scratch RFC 4648 encoder/decoder - no OpenSSL involved (unlike the checksum commands), since
+base64 is just a fixed bit-shuffling table, not cryptography. `-w cols` controls encoder line-wrapping (default
+76, matching real `base64`; `-w 0` disables it entirely, matching real `base64 -w0`/`basenc -w0`); decoding ignores
+`\n`/`\r` in the input either way, so it round-trips its own wrapped output. `-u` swaps in the URL-safe alphabet
+(`-`/`_` instead of `+`/`/`) - verified byte-for-byte against real `basenc --base64url` in both directions.
+
+Decoding tolerates a final group with **no** explicit `=` padding at all, not just one that has it - this is how
+base64url is used in the wild (JWTs, most of all), and it is what lets `jwt` below reuse the exact same decoder
+with no separate, unpadded-aware variant to keep in sync.
+
+`jwt` splits a token on its two `.` separators and base64url-decodes the header and/or payload segments (the
+URL-safe decoding above, reused directly via `fmemopen()`, not reimplemented) - each printed as one line of raw
+JSON (pipe through `nshbox json` - see below - to pretty-print it). Defaults to the **payload only**, since the
+claims are almost always what you actually want to glance at; `--header` shows the header instead, `--all` shows
+both (header then payload). **No signature verification at all** - this is a read-only decode for inspecting a
+token's claims, not a security check. The point of running it here rather than pasting a token into an external
+decoder site: the token never has to leave the device at all. **Prefer piping the token in over stdin rather than
+passing it as an argument** (`echo "$TOKEN" | nshbox jwt`) where the choice is yours - an argument lands in this
+process's own `/proc/<pid>/cmdline` and in `ps` output for as long as it runs, visible to any other user who can
+see the device's process table; stdin does not.
+
+## json
+
+```sh
+nshbox ps --json | nshbox json     # pretty-print any command's compact JSON by piping it through
+nshbox ps --JSON                   # ...or the same thing directly, on any command that supports --json
+nshbox json < some_api_response.json
+```
+
+```text
+$ echo '{"a":1,"b":[1,2,{"c":true}]}' | nshbox json
+{
+  "a": 1,
+  "b": [
+    1,
+    2,
+    {
+      "c": true
+    }
+  ]
+}
+```
+
+A standalone, general-purpose JSON pretty-printer (2-space indent, matches `jq .`/`python3 -m json.tool --indent
+2` byte-for-byte) - reads stdin or a file, not tied to `nshbox`'s own output in any way, so it works just as well
+on a `curl` response or any other JSON you happen to have on the device. A single-pass bracket-tracking
+reformatter (`json_pretty_print()` in `nshbox.c`), not a full parser: string boundaries and escapes are tracked
+(so a `}`/`,` inside a string is never mistaken for real structure), but number syntax and string-escape
+correctness are not validated - malformed input may produce malformed-looking output rather than a clean rejection
+the way `jq` would give one. Unbalanced brackets (missing or extra `}`/`]`) are the one thing that **is** always
+caught and reported as an error, since those are cheap to track anyway as part of the indentation logic itself.
+
+Every command above that supports `--json` (`ps`/`du`/`find`/`dig`/`nslookup`/`uptime`) also accepts `--JSON` or
+`--Json` as a drop-in replacement for `--json` that pretty-prints instead of the normal compact, single-line
+output - reusing this exact same `json_pretty_print()` function, not a second implementation: the target command
+runs completely unchanged (including its own `--json`-branch, which is what `--JSON`/`--Json` gets rewritten to
+before that command's own argument parser ever sees it), its entire stdout output is captured in memory, and only
+then piped through the pretty-printer - `nshbox find ... --JSON` and `nshbox find ... --json | nshbox json` produce
+byte-identical output. Plain `--json` itself is completely unaffected either way - still exactly the same compact
+output it always was, so nothing that already parses it needs to change. One accepted tradeoff: because the
+rewrite happens before the target command sees its own arguments, a literal `--JSON`/`--Json` intended as a genuine
+argument to some other command (e.g. a `grep` pattern) would be misread as this flag instead - accepted since both
+spellings are unusual enough in practice, and this is opt-in, to not be worth a per-command allowlist.
 
 ## Installing symlinks
 

@@ -133,6 +133,18 @@ if [ ! -d "$ETC_DIR" ]; then
   log "no ${ETC_DIR} yet; bootstrapping it from the device's own /etc"
   mkdir -p "$ETC_DIR"
   cp -a /etc/. "$ETC_DIR/"
+
+  # Unlike passwd/group (which the device genuinely has none of - see
+  # "Verified facts" in docs/platform.md), resolv.conf DOES already exist
+  # on the device, just broken (see docs/platform.md). The bulk copy just
+  # above pulls that broken file into ${ETC_DIR} along with everything
+  # else, which would otherwise make the "only if not already there"
+  # override loop below think this project's own resolv.conf override was
+  # already applied and skip it forever - so remove the device's own copy
+  # here, making resolv.conf start "missing" in ${ETC_DIR} exactly like
+  # passwd/group already do, and letting the same override loop apply the
+  # real one uniformly for all three files.
+  rm -f "${ETC_DIR}/resolv.conf"
   log "bootstrapped ${ETC_DIR}"
 fi
 

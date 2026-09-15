@@ -17,6 +17,7 @@ DEVICE_HOSTNAME=""
 SSH_PORT="2222"
 AUTHORIZED_KEY=""
 INSTALL_PREFIX="/data"
+DNS_SERVERS=""
 
 # Default port adbd listens on in network (TCP) mode - the near-universal
 # default for "adb tcpip"-enabled devices. Not exposed as a config key
@@ -67,6 +68,9 @@ load_config()
         ;;
       INSTALL_PREFIX)
         INSTALL_PREFIX="$value"
+        ;;
+      DNS_SERVERS)
+        DNS_SERVERS="$value"
         ;;
       *)
         die "unknown config key in ${config_file}: ${key}"

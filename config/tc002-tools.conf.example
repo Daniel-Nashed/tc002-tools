@@ -39,3 +39,11 @@ AUTHORIZED_KEY=
 # On-device installation prefix. /data is the only verified location -
 # see docs/device_layout.md.
 INSTALL_PREFIX=/data
+
+# Space-separated DNS server IPs to write into the device's /etc/resolv.conf
+# (see docs/platform.md - the device's own resolv.conf is broken out of the
+# box). Leave blank to use runtime/etc/resolv.conf's own content as-is
+# (edit that file directly if you prefer - either way works, this is just
+# the per-deployment alternative to editing a tracked repo file). Example:
+# DNS_SERVERS=1.1.1.1 8.8.8.8
+DNS_SERVERS=

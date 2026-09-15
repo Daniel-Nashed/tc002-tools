@@ -48,11 +48,15 @@ tc002-discover; see its own --help).
 
 If discovery finds nothing at all - expected from WSL, whose NAT
 networking cannot receive the TC002's UDP broadcast, see
-../tc002-discover/README.md - this asks for an IP address to use directly
-instead of just failing. --ip skips discovery entirely and goes straight
-to that prompt's answer, for scripting this non-interactively. Either way
-the given IP is not independently verified here - whatever install
-script runs next does the real check via its own "adb connect".
+../tc002-discover/README.md - this first tries the last DEVICE_IP a
+previous successful run already wrote into the config file, verified with
+a real "adb connect" (not trusted blindly, since DHCP may have moved the
+device since then). Only if that also fails does it ask for an IP address
+to use directly instead of just failing. --ip skips discovery (and the
+cached-IP fallback) entirely and goes straight to that prompt's answer,
+for scripting this non-interactively. An IP given via --ip or the prompt
+is not independently verified here - whatever install script runs next
+does the real check via its own "adb connect".
 
   --config FILE      Config file (default: config/tc002-tools.conf).
   --timeout SECONDS  Passed through to tc002-discover (default: its own).
@@ -288,6 +292,52 @@ use_ip_hint()
   write_device_info "$ip" ""
 }
 
+# Falls back to the last DEVICE_IP a previous successful discovery already
+# wrote into the config file, when live discovery (discover(), above)
+# finds nothing - the common case on WSL, where UDP broadcast reception
+# never works at all (see usage() above), so tc002-discover's own cache/
+# TCP-probe fast path (see ../tc002-discover/README.md) never gets a first
+# IP to cache in the first place: that fast path only helps once *some*
+# run, anywhere, has completed a real UDP discovery to seed it, and on a
+# WSL-only setup that first run can never happen on its own.
+#
+# Verified with the same "adb connect" reachability check require_device()
+# uses everywhere else in this project (see common.sh) - not trusted
+# blindly, since the device's IP may have changed (DHCP) since the config
+# file was last written. Returns 1 (falls through to the manual prompt)
+# if there is no cached IP, or it no longer answers.
+try_cached_ip()
+{
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 1
+  fi
+
+  load_config "$CONFIG_FILE"
+
+  if [ -z "$DEVICE_IP" ]; then
+    return 1
+  fi
+
+  log "no device found via live discovery; trying last known DEVICE_IP=${DEVICE_IP} from ${CONFIG_FILE}"
+
+  require_cmd adb
+
+  local connect_output
+  connect_output="$(adb connect "${DEVICE_IP}:${ADB_TCP_PORT}" 2>&1)" || true
+  log "adb connect ${DEVICE_IP}:${ADB_TCP_PORT}: ${connect_output}"
+
+  case "$connect_output" in
+    "connected to "*|"already connected to "*)
+      log "last known device IP ${DEVICE_IP} is still reachable - using it (already set in ${CONFIG_FILE})"
+      return 0
+      ;;
+    *)
+      log "last known device IP ${DEVICE_IP} did not respond - it may have moved (DHCP) or be offline"
+      return 1
+      ;;
+  esac
+}
+
 main()
 {
   skip_if_device_already_set
@@ -309,6 +359,11 @@ main()
   fi
 
   log "no device found via discovery (expected from WSL - broadcast reception does not work there, see ../tc002-discover/README.md)"
+
+  if try_cached_ip; then
+    return
+  fi
+
   printf '[tc002-tools] enter the device IP manually (or leave blank to abort): ' >&2
   read -r answer
 
