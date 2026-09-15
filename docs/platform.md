@@ -4,11 +4,52 @@
 This document covers facts about the Ulanzi TC002 device and its firmware itself. It is separate from
 [build_platform.md](build_platform.md), which covers the Debian Buster host used to *cross-compile* for the device.
 
+## TC001 vs TC002: two different devices, not two versions of the same one
+
+It's easy to assume "TC002" is just a newer TC001 - it is not. They share a product family name and a similar
+physical form factor (an LED pixel-matrix desk clock), but the hardware, OS, and customization approach underneath
+are completely different, and nothing in this project applies to a TC001.
+
+|                             | TC001                                                                                                                                                                                                                                                                           | TC002                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Hardware**                | ESP32 microcontroller (Espressif), CH340 USB-serial bridge                                                                                                                                                                                                                      | Sigmastar SSD21X SoC - a full embedded-Linux application processor, not a microcontroller                                                                                                                                                                                                                                                                  |
+| **Display**                 | 32x8 RGB LED matrix (256 LEDs)                                                                                                                                                                                                                                                  | 52x16 RGB LED matrix (832 LEDs)                                                                                                                                                                                                                                                                                                                            |
+| **OS / runtime**            | None - firmware runs directly on the ESP32 (Arduino/ESP-IDF/RTOS style)                                                                                                                                                                                                         | A real embedded Linux userspace ("FlyThings", see [Naming](#naming) below), squashfs root filesystem, BusyBox, and Android-derived components including `adbd`                                                                                                                                                                                             |
+| **Vendor dev workflow**     | USB-serial flashing, no special IDE                                                                                                                                                                                                                                             | Vendor's FlyThings IDE (Windows), over Wi-Fi ADB - see [Unknowns](#unknowns--not-yet-determined)                                                                                                                                                                                                                                                           |
+| **Community customization** | **Firmware replacement** - flash an entirely different image, most commonly [AWTRIX 3](https://github.com/Blueforcer/awtrix3) or its actively-developed successor [AWTRIX NG](https://github.com/Blueforcer/awtrix-ng) (also ESPHome), that replaces Ulanzi's own code outright | **Coexist with the vendor OS** - nothing here replaces firmware; `tc002-tools` provisions an SSH server *alongside* the existing Linux userspace, and other community projects (see [atomicstack/tc002-customisation](https://github.com/atomicstack/tc002-customisation)) reverse-engineer and extend the existing HTTP/MQTT API rather than replacing it |
+
+The two devices need entirely different tooling because, underneath the shared branding, they are entirely
+different computers: one is a microcontroller you reprogram from scratch, the other is a small Linux machine you
+get a shell on. **If you came here looking for AWTRIX, EspHoMaTriX, or ESPHome for a TC001, this project is not
+it** - [AWTRIX 3](https://github.com/Blueforcer/awtrix3) and [AWTRIX NG](https://github.com/Blueforcer/awtrix-ng)
+(same author, same devices, NG is the newer rewrite) are both a great, recommended approach for the TC001 - use
+one of those instead.
+
 ## Naming
 
-"FlyThings" is the name used internally for the TC002's Linux runtime (visible in `nshbox`'s own source header). This
-project has not independently confirmed further branding, versioning, or provenance details for FlyThings beyond what is
-observed on the one tested device - see "Unknowns" below.
+"FlyThings" is the name used internally for the TC002's Linux runtime (visible in `nshbox`'s own source header) -
+and it is a real, publicly documented product, not a name this project invented or guessed at. Community
+reverse-engineering of the TC002 documents the following technology stack, for direct comparison against the
+TC001 table above:
+
+| Layer                  | TC002                                                                                                                                                                                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SoC**                | Sigmastar SSD21X                                                                                                                                                                                                                                                |
+| **CPU**                | Dual-core ARM Cortex-A7, up to 1 GHz                                                                                                                                                                                                                            |
+| **RAM**                | 64 MB DRAM                                                                                                                                                                                                                                                      |
+| **Flash**              | 32 MB SPI NOR                                                                                                                                                                                                                                                   |
+| **Kernel**             | Linux 4.9.84                                                                                                                                                                                                                                                    |
+| **OS / app framework** | FlyThings (also called "zkos") v2.1, by [zkswe](https://github.com/zkswe)                                                                                                                                                                                       |
+| **App layer**          | `easyui` 2.4.0, `system` 2.6.2, built from `zkdaemon`/`zkdisplay`/`zkgui` components                                                                                                                                                                            |
+| **Vendor SDK / IDE**   | FlyThings IDE (Windows), flashing/debugging over Wi-Fi ADB - [developer.flythings.cn](https://developer.flythings.cn/en/download.html) (English), [zkswe.github.io/flythings-doc](https://zkswe.github.io/flythings-doc/zh-hans/download.html) (Chinese source) |
+
+This project has not independently re-verified these specific version numbers, or the exact SSD21X variant
+(SSD201/SSD202D/SSD210/SSD212 differ in RAM/flash/peripherals), against its own tested device - see "Unknowns"
+below. What **is** independently confirmed on the tested device is the CPU ABI itself
+(`arm-linux-gnueabihf`-compatible, see "Verified facts" below), which is consistent with this table's Cortex-A7
+claim. The "FlyThings" name itself, and it being a genuine third-party vendor SDK rather than an Ulanzi-specific
+or Android-stock component, is now externally corroborated, not just an internal string this project happened to
+find.
 
 ## Where persistent storage actually lives: /data vs /tmp
 
@@ -132,7 +173,12 @@ bootstrap and mounting now.
   supervisor Dropbear could run under. Needed before persistent startup can be implemented - see the implementation
   brief's Phase 11 and [architecture.md](architecture.md).
 - Whether the firmware runs any supervisor that restarts `adbd` automatically if it is stopped.
-- Full FlyThings provenance (Buildroot, Yocto, a vendor SDK, or something else) - not established.
+- The underlying base distribution beneath zkswe's FlyThings/zkos application layer (Buildroot, Yocto, a vendor BSP,
+  or something else) - FlyThings itself is now identified (see "Naming" above), but what it's built on top of is
+  not.
+- The exact SSD21X SoC variant (SSD201/SSD202D/SSD210/SSD212 differ in RAM/flash/peripherals) and kernel version on
+  the tested device - not independently pinned down here; see "Fingerprinting a new device" below for the commands
+  that would establish this.
 - Whether additional TC002 hardware or firmware revisions share this exact ABI and layout - see "Fingerprinting a new
   device" below. Treat any device this project has not personally fingerprinted as unverified.
 
@@ -144,9 +190,14 @@ compare:
 ```sh
 uname -a
 uname -m
+cat /proc/cpuinfo
 file /bin/busybox
 readelf -A /bin/busybox
 ```
+
+`uname -a` also gives the kernel version - useful to compare against FlyThings' publicly documented kernel line
+(see "Naming" above) - and `/proc/cpuinfo` gives the CPU implementer/part, useful to confirm or refute the SSD21X/
+Cortex-A7 identification against a new device.
 
 If the ABI differs from what is recorded for the tested device, treat the new target as unverified until the full test
 suite (see [../tests/](../tests/)) has been re-run against it.

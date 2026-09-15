@@ -29,6 +29,13 @@ service (see [docs/platform.md](docs/platform.md) for what that means in practic
 dynamically linked Dropbear SSH server for the device's ARMHF environment, using public-key authentication only,
 together with scripts that provision and verify it over ADB without replacing original firmware components.
 
+**Not the same device as the Ulanzi TC001** - the TC001 is a completely different, ESP32-based microcontroller
+customized by flashing entirely different firmware, most commonly [AWTRIX 3](https://github.com/Blueforcer/awtrix3)
+or its successor [AWTRIX NG](https://github.com/Blueforcer/awtrix-ng) - both a great, recommended approach for that
+device. See [Related projects](#related-projects) below, and
+[docs/platform.md](docs/platform.md#tc001-vs-tc002-two-different-devices-not-two-versions-of-the-same-one) for the
+full hardware/OS/firmware comparison.
+
 ### Core components
 
 Built and deployed by default, no flags needed - see
@@ -167,7 +174,7 @@ manual - run only after confirming SSH works, from the device itself - see
 ## Quick links
 
 - [docs/architecture.md](docs/architecture.md) — how the pieces fit together, verified vs. experimental
-- [docs/platform.md](docs/platform.md) — the TC002/FlyThings device itself, including what `adbd` is and why it matters
+- [docs/platform.md](docs/platform.md) — the TC002/FlyThings device itself: how it differs from the TC001, and what `adbd` is and why it matters
 - [docs/build_platform.md](docs/build_platform.md) — setting up the Buster ARMHF cross-build environment
 - [docs/dropbear.md](docs/dropbear.md) — the Dropbear build, its patch, and why
 - [docs/device_layout.md](docs/device_layout.md) — the on-device filesystem layout this project uses
@@ -175,12 +182,18 @@ manual - run only after confirming SSH works, from the device itself - see
 - [docs/recovery.md](docs/recovery.md) — recovering a device if SSH access is lost
 - [docs/security.md](docs/security.md) — the full security model and its limits
 
-## Related project
+## Related projects
 
-[atomicstack/tc002-customisation](https://github.com/atomicstack/tc002-customisation) is an independent, existing
-project covering TC002 customization more broadly. `tc002-tools` was started separately to focus specifically on secure
-shell access and build tooling. Collaboration and possible consolidation are intended once this project is mature enough
-to present.
+**Looking for the TC001?** That's a different device entirely (ESP32, no Linux, no ADB) - not this project.
+[Blueforcer/awtrix3](https://github.com/Blueforcer/awtrix3) and its successor
+[Blueforcer/awtrix-ng](https://github.com/Blueforcer/awtrix-ng) are both a great, recommended approach for the
+TC001. See [docs/platform.md](docs/platform.md#tc001-vs-tc002-two-different-devices-not-two-versions-of-the-same-one)
+for why the two devices aren't interchangeable.
+
+For the **TC002** itself, [atomicstack/tc002-customisation](https://github.com/atomicstack/tc002-customisation) is an
+independent, existing project covering TC002 customization more broadly (HTTP API, MQTT, a web panel, a runtime
+replacement app). `tc002-tools` was started separately to focus specifically on secure shell access and build
+tooling. Collaboration and possible consolidation are intended once this project is mature enough to present.
 
 ## Attribution
 
