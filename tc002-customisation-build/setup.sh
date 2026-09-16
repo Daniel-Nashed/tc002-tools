@@ -11,13 +11,6 @@ source "${SCRIPT_DIR}/common.sh"
 
 REPO_URL="https://github.com/atomicstack/tc002-customisation.git"
 
-# Cloned entirely outside this repo's own working tree - a sibling of
-# tc002-tools/ itself, not just of this directory - specifically so it
-# can never end up inside tc002-tools' own git
-# history, not even by accident: no .gitignore rule is needed as a
-# safety net for something that structurally is never there at all.
-REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)/tc002-customisation"
-
 header "TC002 Linux development environment setup"
 
 # Collected into one list rather than dying on the first miss, so a
@@ -57,3 +50,4 @@ header "Build Docker image"
 
 log "setup complete"
 log "repository: ${REPO_DIR}"
+echo

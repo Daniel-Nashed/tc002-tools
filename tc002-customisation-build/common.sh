@@ -11,6 +11,23 @@
 # Source this file; do not execute it directly.
 set -euo pipefail
 
+# Shared by build_image.sh/build.sh/start_panel.sh - one place to bump
+# when upstream's own pinned Zig version moves, instead of three
+# separately-declared copies that could drift out of sync with each
+# other.
+IMAGE_NAME="tc002-build"
+ZIG_VERSION="0.16.0"
+
+# A sibling of tc002-tools/ itself, not of this directory - specifically
+# so the cloned upstream repo can never end up inside tc002-tools' own
+# git history, not even by accident: no .gitignore rule is needed as a
+# safety net for something that structurally is never there in the first
+# place. Overridable via the environment (REPO_DIR=... ./build.sh) to
+# point at an existing checkout somewhere else instead. Every script here
+# sets SCRIPT_DIR to its own directory before sourcing this file, so it
+# is already in scope by the time this line runs.
+REPO_DIR="${REPO_DIR:-$(cd "${SCRIPT_DIR}/../.." && pwd)/tc002-customisation}"
+
 delim()
 {
   echo -------------------------------------------------------------------------------- >&2

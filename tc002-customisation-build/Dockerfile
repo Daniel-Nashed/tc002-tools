@@ -7,6 +7,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        adb \
+        python3 \
         xz-utils && \
     rm -rf /var/lib/apt/lists/*
 
