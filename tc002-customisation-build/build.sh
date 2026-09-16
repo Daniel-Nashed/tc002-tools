@@ -37,5 +37,5 @@ docker run --rm \
 
 header "Build completed"
 
-cd "$REPO_DIR"
+echo "Continue with: $REPO_DIR"
 echo
