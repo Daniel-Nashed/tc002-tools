@@ -194,6 +194,9 @@ For the **TC002** itself, [atomicstack/tc002-customisation](https://github.com/a
 independent, existing project covering TC002 customization more broadly (HTTP API, MQTT, a web panel, a runtime
 replacement app). `tc002-tools` was started separately to focus specifically on secure shell access and build
 tooling. Collaboration and possible consolidation are intended once this project is mature enough to present.
+[tc002-customisation-build/](tc002-customisation-build/README.md) is a small local convenience harness in this
+repo for trying that other project's own Zig-based runtime build - not a `tc002-tools` deliverable, and not wired
+into `build_all.sh`.
 
 ## Attribution
 
