@@ -35,6 +35,7 @@ docker run --rm \
   "${IMAGE_NAME}:${ZIG_VERSION}" \
   zig build
 
-header "Build completed successfully"
+header "Build completed"
 
-find "${REPO_DIR}/runtime/zig-out" -type f -exec file {} \;
+cd "$REPO_DIR"
+echo

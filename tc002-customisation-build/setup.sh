@@ -33,11 +33,6 @@ done
 
 if [ -n "$MISSING" ]; then
   header "Missing required tools:$MISSING"
-  echo "On Ubuntu/Debian install them with:"
-  echo
-  echo "  sudo apt update"
-  echo "  sudo apt install git docker.io adb python3"
-  echo
   exit 1
 fi
 
