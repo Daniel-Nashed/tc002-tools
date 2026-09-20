@@ -53,7 +53,7 @@
  *   nshbox base64 [-d] [-u] [-w cols] [file]
  *   nshbox jwt [--all|--header] [token]
  *   nshbox json [file]
- *   nshbox ldd [file ...]
+ *   nshbox ldd [--json] [file ...]
  *   nshbox hostname [-f]
  *   nshbox dig [--json] <name> [A|CNAME|MX|TXT]
  *   nshbox nslookup [--json] [-type=A|CNAME|MX|TXT] <name>
@@ -7195,11 +7195,163 @@ static int cmd_json(int argc, char **argv)
 /* ldd                                                                */
 /* ------------------------------------------------------------------ */
 
+/* One line of the linker's --list output -> one JSON object. Shapes seen:
+ *
+ *   linux-vdso.so.1 (0x7efb4000)
+ *   libc.so.6 => /lib/libc.so.6 (0x76e2f000)
+ *   /lib/ld-linux-armhf.so.3 (0x76f5a000)
+ *   libfoo.so.1 => not found
+ *
+ * "path" is the resolved file, "" when there is none (the vdso is
+ * virtual, a missing library has nowhere it resolved to); a line naming
+ * an absolute path with no "=>" (the linker itself) is its own path.
+ * "address" is "" when the linker printed none. "found" is false only for
+ * "not found", so a script can test that instead of an empty path.
+ * Lines that do not parse into a name are skipped. Modifies line. */
+static void ldd_json_entry(char *line, int *count)
+{
+    char *name;
+    char *path = (char *)"";
+    char *address = (char *)"";
+    char *p;
+    char *end;
+    int found = 1;
+
+    while (*line == ' ' || *line == '\t')
+        line++;
+
+    end = line + strlen(line);
+
+    while (end > line && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t'))
+        *--end = '\0';
+
+    if (*line == '\0')
+        return;
+
+    p = strrchr(line, '(');
+
+    if (p && p > line && p[-1] == ' ' && strncmp(p, "(0x", 3) == 0 && end[-1] == ')') {
+        end[-1] = '\0';
+        address = p + 1;
+        p[-1] = '\0';
+    }
+
+    p = strstr(line, " => ");
+
+    if (p) {
+        *p = '\0';
+        name = line;
+
+        if (strcmp(p + 4, "not found") == 0)
+            found = 0;
+        else
+            path = p + 4;
+    } else {
+        name = line;
+
+        if (name[0] == '/')
+            path = name;
+    }
+
+    if (*name == '\0')
+        return;
+
+    if (*count > 0)
+        putchar(',');
+    (*count)++;
+
+    fputs("{\"name\":", stdout);
+    json_print_string(name);
+    fputs(",\"path\":", stdout);
+    json_print_string(path);
+    fputs(",\"address\":", stdout);
+    json_print_string(address);
+    printf(",\"found\":%s}", found ? "true" : "false");
+}
+
+/* --json needs the linker's output, so it cannot exec() it directly the
+ * way plain ldd does - fork, read its stdout through a pipe, parse each
+ * line. A linker that cannot be run, or a file it rejects, gives its usual
+ * message on stderr, a valid "[]" on stdout, and a non-zero exit. */
+static int ldd_json(const char *linker, const char *file)
+{
+    int fds[2];
+    pid_t pid;
+    FILE *in;
+    char *line = NULL;
+    size_t cap = 0;
+    int count = 0;
+    int status;
+
+    if (pipe(fds) != 0) {
+        perror("pipe");
+        return 1;
+    }
+
+    fflush(stdout);
+    pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        close(fds[0]);
+        close(fds[1]);
+        return 1;
+    }
+
+    if (pid == 0) {
+        close(fds[0]);
+        dup2(fds[1], STDOUT_FILENO);
+        close(fds[1]);
+        execl(linker, linker, "--list", file, (char *)NULL);
+        perror(linker);
+        _exit(127);
+    }
+
+    close(fds[1]);
+    in = fdopen(fds[0], "r");
+
+    putchar('[');
+
+    if (in) {
+        while (getline(&line, &cap, in) >= 0)
+            ldd_json_entry(line, &count);
+
+        fclose(in);
+    } else {
+        close(fds[0]);
+    }
+
+    fputs("]\n", stdout);
+    free(line);
+
+    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return 1;
+
+    return 0;
+}
+
 static int cmd_ldd(int argc, char **argv)
 {
     static const char linker[] = "/lib/ld-linux-armhf.so.3";
     char **linker_argv;
+    int json = 0;
     int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--json") == 0)
+            json = 1;
+    }
+
+    if (json) {
+        /* The linker's --list takes one program; several files would
+         * make it treat the extras as that program's arguments. */
+        if (argc != 3) {
+            fprintf(stderr, "Usage: nshbox ldd --json <file>\n");
+            return 2;
+        }
+
+        return ldd_json(linker, strcmp(argv[1], "--json") == 0 ? argv[2] : argv[1]);
+    }
 
     /* Not its own program - just the dynamic linker's own --list mode,
      * the same trick glibc's own ldd uses under the hood. */
@@ -7264,7 +7416,7 @@ static const command_t commands[] = {
     { "base64",   cmd_base64,   "Base64 encode/decode (-d decode, -u URL-safe alphabet, -w cols wrap, 0 = no wrap) [file]" },
     { "jwt",      cmd_jwt,      "Decode a JWT's payload (--header for header, --all for both) - no signature verification [token]" },
     { "json",     cmd_json,     "Pretty-print JSON, 2-space indent [file]" },
-    { "ldd",      cmd_ldd,      "List a binary's shared library dependencies" },
+    { "ldd",      cmd_ldd,      "List a binary's shared library dependencies [--json]" },
     { "hostname", cmd_hostname, "Print the system hostname (-f fully-qualified)" },
     { "dig",      cmd_dig,      "DNS lookup [--json] [name] [A|CNAME|MX|TXT]" },
     { "nslookup", cmd_nslookup, "DNS lookup [--json] [-type=A|CNAME|MX|TXT] name" },
@@ -7463,7 +7615,7 @@ static void usage(void)
 
 /* "--JSON"/"--Json" is an opt-in pretty-printed variant of whichever
  * --json a command already supports (ps/du/find/dig/nslookup/uptime/
- * sysinfo/netstat/stat/the checksum commands) -
+ * sysinfo/netstat/stat/ldd/the checksum commands) -
  * reusing json_pretty_print() rather than teaching each of those
  * commands its own separate pretty-printing path. Rewrites the matched
  * argv entry to "--json" in place, so the target command's own,

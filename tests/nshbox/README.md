@@ -54,7 +54,8 @@ another `test_*.cpp` file (see below) - no other file needs to change.
 **`ldd` cannot be covered by this harness at all**, not just "not yet": `cmd_ldd()` in `nshbox.c` is hardcoded to
 `execv("/lib/ld-linux-armhf.so.3", ...)` - the ARM dynamic linker's own `--list` mode, the same trick glibc's real
 `ldd` uses under the hood. That path does not exist on the x86 build this harness runs, and never will - `ldd` is
-architecturally ARM-only, not a gap worth chasing here.
+architecturally ARM-only, not a gap worth chasing here. That includes `ldd --json` and its line parser
+(`ldd_json_entry()`), which has to be checked by hand on the device, e.g. `nshbox ldd --json /data/bin/nshbox`.
 
 Commands that report the running system's own live state (`sysinfo`, `free`, `vmstat`, `iostat`, `top`, `netstat`,
 `uptime`) are a different kind of test to write: a second, independent reference-tool invocation returns *different*

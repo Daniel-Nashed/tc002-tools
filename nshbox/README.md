@@ -57,7 +57,7 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 | `nshbox base64 [-d] [-u] [-w cols] [file]` | no | Base64 encode/decode; `-u` for the URL-safe alphabet, `-w` to change/disable line-wrapping - see below. |
 | `nshbox jwt [--all\|--header] [token]` | no | Decode a JWT's payload (`--header` for header, `--all` for both) as raw JSON - no signature verification - see below. |
 | `nshbox json [file]` | no | Pretty-print JSON, 2-space indent - reads stdin or a file; also available as `--JSON`/`--Json` on any command above that supports `--json` - see below. |
-| `nshbox ldd [file ...]` | no | List a binary's shared library dependencies. |
+| `nshbox ldd [--json\|--JSON] [file ...]` | no | List a binary's shared library dependencies (or a JSON array, compact or pretty; one file only with `--json`) - see below. |
 | `nshbox hostname [-f]` | no | Print the system hostname; `-f` resolves it to a fully-qualified name via `/etc/hosts`/DNS. |
 | `nshbox dig [--json\|--JSON] <name> [A\|CNAME\|MX\|TXT]` | no | DNS lookup, `dig`-style simplified ANSWER SECTION output (or a JSON array, compact or pretty) - see below. |
 | `nshbox nslookup [--json\|--JSON] [-type=A\|CNAME\|MX\|TXT] <name>` | no | DNS lookup, `nslookup`-style output (or a JSON array, compact or pretty) - see below. |
@@ -569,9 +569,9 @@ rewrite happens before the target command sees its own arguments, a literal `--J
 argument to some other command (e.g. a `grep` pattern) would be misread as this flag instead - accepted since both
 spellings are unusual enough in practice, and this is opt-in, to not be worth a per-command allowlist.
 
-## JSON output of netstat, stat and the checksum commands
+## JSON output of netstat, stat, ldd and the checksum commands
 
-All three emit one array of flat objects, always an array even for a single file, `[]` when nothing matched. Where
+All of them emit one array of flat objects, always an array even for a single file, `[]` when nothing matched. Where
 a value can be missing, the key is still present and holds `""` - never `null`, never `0` - the same rule as
 `sysinfo --json`.
 
@@ -586,8 +586,17 @@ nshbox stat --JSON /data/bin/nshbox
 
 nshbox sha256sum --JSON /data/bin/nshbox
 # [{"file":"/data/bin/nshbox","algorithm":"sha256","digest":"<hex>"}]
+
+nshbox ldd --json /data/bin/nshbox
+# [{"name":"libcrypto.so.1.1","path":"/lib/libcrypto.so.1.1","address":"0x76e2f000","found":true},
+#  {"name":"libfoo.so.1","path":"","address":"","found":false}]
 ```
 
+- **`ldd`**: one object per line of the dynamic linker's `--list` output. `path` is `""` when nothing resolved -
+  a missing library, or the virtual `linux-vdso.so.1`. `found` is `false` only for a library the linker reports as
+  `not found`, so a script can test that instead of an empty `path`. `address` is `""` if the linker printed none.
+  `--json` takes exactly one file, because the linker's `--list` handles one program at a time. Like plain `ldd`,
+  it is ARM-only: it runs `/lib/ld-linux-armhf.so.3`.
 - **`netstat`**: address and port are separate fields (`local_address`/`local_port`, `remote_address`/
   `remote_port`) instead of the text output's combined `ip:port`. `pid` and `process` are `""` when no owning
   process could be found, where the text output shows `-` and `?`.
