@@ -39,7 +39,8 @@ raw archive-byte diff - two implementations can produce byte-different but equal
 `readlink`, `du` (`-b` apparent-size only, not the default block-count mode, which depends on the filesystem's own
 block size), `find`, `tree` (see its own notes below), `pstree` (see its own notes below too), `ps` (see its own
 notes below too), `netstat` (a listening socket the test opens itself on port 0, so the owning pid is known;
-see test_netstat.cpp), `sha256sum`/`sha1sum`/`sha384sum`/`sha512sum`/`md5sum` (including `--json`), `which`, `tee`, `base64` (standard
+see test_netstat.cpp), `dig`/`nslookup` (only the reverse-lookup name construction, pinned via the name each one
+queries rather than the answer - which depends on the container's resolver; see test_dns.cpp), `sha256sum`/`sha1sum`/`sha384sum`/`sha512sum`/`md5sum` (including `--json`), `which`, `tee`, `base64` (standard
 encode/decode diffed against real `base64`, `-u` diffed against real `basenc --base64url` - GNU `base64` itself has
 no URL-safe mode), `jwt` (no reference CLI tool exists for this one - diffed against the well-known jwt.io sample
 token instead, plus tokens this suite builds itself with `nshbox base64 -u`, which doubles as an end-to-end check

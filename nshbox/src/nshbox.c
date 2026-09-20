@@ -55,8 +55,9 @@
  *   nshbox json [file]
  *   nshbox ldd [--json] [file ...]
  *   nshbox hostname [-f]
- *   nshbox dig [--json] <name> [A|CNAME|MX|TXT]
- *   nshbox nslookup [--json] [-type=A|CNAME|MX|TXT] <name>
+ *   nshbox dig [--json] <name> [A|CNAME|MX|TXT|PTR]
+ *   nshbox dig [--json] -x <ip>
+ *   nshbox nslookup [--json] [-type=A|CNAME|MX|TXT|PTR] <name|ip>
  *   nshbox find [path ...] [-name pattern] [-type f|d|l] [-maxdepth n] [--json]
  *   nshbox tree [-L level] [path]
  *   nshbox tar -c|-x|-t[z] -f archive [-C dir] [path ...]
@@ -4609,6 +4610,7 @@ static const char *dns_type_name(int type)
         case ns_t_cname: return "CNAME";
         case ns_t_mx:    return "MX";
         case ns_t_txt:   return "TXT";
+        case ns_t_ptr:   return "PTR";
         default:         return "?";
     }
 }
@@ -4619,6 +4621,44 @@ static int dns_type_from_name(const char *s)
     if (strcasecmp(s, "CNAME") == 0) return ns_t_cname;
     if (strcasecmp(s, "MX") == 0)    return ns_t_mx;
     if (strcasecmp(s, "TXT") == 0)   return ns_t_txt;
+    if (strcasecmp(s, "PTR") == 0)   return ns_t_ptr;
+    return -1;
+}
+
+/* Reverse-lookup name for an IP literal: d.c.b.a.in-addr.arpa for IPv4
+   (RFC 1035 3.5), 32 dot-separated nibbles, least significant first,
+   under ip6.arpa for IPv6 (RFC 3596 2.5). Returns 0 on success, -1 if s
+   is not an IP literal at all. out needs room for the IPv6 form: 32
+   nibbles x 2 chars + "ip6.arpa" + NUL = 73 bytes. */
+static int dns_reverse_name(const char *s, char *out, size_t outlen)
+{
+    struct in_addr a4;
+    struct in6_addr a6;
+
+    if (inet_pton(AF_INET, s, &a4) == 1) {
+        const unsigned char *b = (const unsigned char *)&a4;
+
+        snprintf(out, outlen, "%u.%u.%u.%u.in-addr.arpa",
+                 (unsigned)b[3], (unsigned)b[2], (unsigned)b[1], (unsigned)b[0]);
+        return 0;
+    }
+
+    if (inet_pton(AF_INET6, s, &a6) == 1) {
+        size_t pos = 0;
+        int i;
+
+        for (i = 15; i >= 0 && pos < outlen; i--) {
+            pos += (size_t)snprintf(out + pos, outlen - pos, "%x.%x.",
+                                    (unsigned)(a6.s6_addr[i] & 0x0f),
+                                    (unsigned)(a6.s6_addr[i] >> 4));
+        }
+
+        if (pos < outlen)
+            snprintf(out + pos, outlen - pos, "ip6.arpa");
+
+        return 0;
+    }
+
     return -1;
 }
 
@@ -4640,7 +4680,8 @@ static void dns_decode_rdata(ns_msg handle, ns_rr rr, char *out, size_t outlen)
         return;
     }
 
-    if (type == ns_t_cname) {
+    /* PTR rdata is one domain name, exactly like CNAME's. */
+    if (type == ns_t_cname || type == ns_t_ptr) {
         char expanded[DNS_NAME_LEN];
 
         if (dn_expand(ns_msg_base(handle), ns_msg_end(handle), rdata, expanded, sizeof(expanded)) >= 0)
@@ -4768,10 +4809,15 @@ static void dns_print_json(const dns_record_t *records, int count)
 
 static int cmd_dig(int argc, char **argv)
 {
+    static const char usage_msg[] =
+        "Usage: nshbox dig [--json] <name> [A|CNAME|MX|TXT|PTR]\n"
+        "       nshbox dig [--json] -x <ip>\n";
     const char *positional[2] = { NULL, NULL };
     int npositional = 0;
     int json = 0;
+    int reverse = 0;
     const char *name;
+    char reverse_name[128];
     int type = ns_t_a;
     dns_record_t records[DNS_MAX_RECORDS];
     int count;
@@ -4784,25 +4830,38 @@ static int cmd_dig(int argc, char **argv)
             continue;
         }
 
+        if (strcmp(argv[arg], "-x") == 0) {
+            reverse = 1;
+            continue;
+        }
+
         if (npositional >= 2) {
-            fprintf(stderr, "Usage: nshbox dig [--json] <name> [A|CNAME|MX|TXT]\n");
+            fprintf(stderr, "%s", usage_msg);
             return 2;
         }
 
         positional[npositional++] = argv[arg];
     }
 
-    if (npositional < 1) {
-        fprintf(stderr, "Usage: nshbox dig [--json] <name> [A|CNAME|MX|TXT]\n");
+    if (npositional < 1 || (reverse && npositional != 1)) {
+        fprintf(stderr, "%s", usage_msg);
         return 2;
     }
 
     name = positional[0];
 
-    if (npositional == 2) {
+    if (reverse) {
+        if (dns_reverse_name(name, reverse_name, sizeof(reverse_name)) != 0) {
+            fprintf(stderr, "dig: -x: '%s' is not an IPv4 or IPv6 address\n", name);
+            return 2;
+        }
+
+        name = reverse_name;
+        type = ns_t_ptr;
+    } else if (npositional == 2) {
         type = dns_type_from_name(positional[1]);
         if (type < 0) {
-            fprintf(stderr, "dig: unknown type '%s' (supported: A, CNAME, MX, TXT)\n", positional[1]);
+            fprintf(stderr, "dig: unknown type '%s' (supported: A, CNAME, MX, TXT, PTR)\n", positional[1]);
             return 2;
         }
     }
@@ -4840,8 +4899,12 @@ static int cmd_dig(int argc, char **argv)
 
 static int cmd_nslookup(int argc, char **argv)
 {
+    static const char usage_msg[] =
+        "Usage: nshbox nslookup [--json] [-type=A|CNAME|MX|TXT|PTR] <name|ip>\n";
     const char *name = NULL;
+    char reverse_name[128];
     int type = ns_t_a;
+    int type_given = 0;
     int json = 0;
     dns_record_t records[DNS_MAX_RECORDS];
     int count;
@@ -4857,14 +4920,15 @@ static int cmd_nslookup(int argc, char **argv)
         if (strncmp(argv[arg], "-type=", 6) == 0) {
             type = dns_type_from_name(argv[arg] + 6);
             if (type < 0) {
-                fprintf(stderr, "nslookup: unknown type '%s' (supported: A, CNAME, MX, TXT)\n", argv[arg] + 6);
+                fprintf(stderr, "nslookup: unknown type '%s' (supported: A, CNAME, MX, TXT, PTR)\n", argv[arg] + 6);
                 return 2;
             }
+            type_given = 1;
             continue;
         }
 
         if (name != NULL) {
-            fprintf(stderr, "Usage: nshbox nslookup [--json] [-type=A|CNAME|MX|TXT] <name>\n");
+            fprintf(stderr, "%s", usage_msg);
             return 2;
         }
 
@@ -4872,8 +4936,17 @@ static int cmd_nslookup(int argc, char **argv)
     }
 
     if (name == NULL) {
-        fprintf(stderr, "Usage: nshbox nslookup [--json] [-type=A|CNAME|MX|TXT] <name>\n");
+        fprintf(stderr, "%s", usage_msg);
         return 2;
+    }
+
+    /* An IP address means a reverse lookup, as with the real nslookup.
+       Only an explicit -type= other than PTR overrides that (and then
+       queries the literal text as a name, which is the caller's call). */
+    if ((!type_given || type == ns_t_ptr) &&
+        dns_reverse_name(name, reverse_name, sizeof(reverse_name)) == 0) {
+        name = reverse_name;
+        type = ns_t_ptr;
     }
 
     count = dns_query(name, type, records, DNS_MAX_RECORDS);
@@ -4911,6 +4984,9 @@ static int cmd_nslookup(int argc, char **argv)
                 break;
             case ns_t_txt:
                 printf("%s\ttext = \"%s\"\n", records[i].name, records[i].data);
+                break;
+            case ns_t_ptr:
+                printf("%s\tname = %s\n", records[i].name, records[i].data);
                 break;
             default:
                 printf("%s\t%s\n", records[i].name, records[i].data);
@@ -7418,8 +7494,8 @@ static const command_t commands[] = {
     { "json",     cmd_json,     "Pretty-print JSON, 2-space indent [file]" },
     { "ldd",      cmd_ldd,      "List a binary's shared library dependencies [--json]" },
     { "hostname", cmd_hostname, "Print the system hostname (-f fully-qualified)" },
-    { "dig",      cmd_dig,      "DNS lookup [--json] [name] [A|CNAME|MX|TXT]" },
-    { "nslookup", cmd_nslookup, "DNS lookup [--json] [-type=A|CNAME|MX|TXT] name" },
+    { "dig",      cmd_dig,      "DNS lookup [--json] [name] [A|CNAME|MX|TXT|PTR] | -x ip (reverse)" },
+    { "nslookup", cmd_nslookup, "DNS lookup [--json] [-type=A|CNAME|MX|TXT|PTR] name|ip (ip = reverse)" },
     { "install",  cmd_install,  "Create applet symlinks in nshbox directory (-f)" },
     { NULL,       NULL,         NULL }
 };

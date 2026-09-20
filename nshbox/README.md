@@ -59,8 +59,8 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 | `nshbox json [file]` | no | Pretty-print JSON, 2-space indent - reads stdin or a file; also available as `--JSON`/`--Json` on any command above that supports `--json` - see below. |
 | `nshbox ldd [--json\|--JSON] [file ...]` | no | List a binary's shared library dependencies (or a JSON array, compact or pretty; one file only with `--json`) - see below. |
 | `nshbox hostname [-f]` | no | Print the system hostname; `-f` resolves it to a fully-qualified name via `/etc/hosts`/DNS. |
-| `nshbox dig [--json\|--JSON] <name> [A\|CNAME\|MX\|TXT]` | no | DNS lookup, `dig`-style simplified ANSWER SECTION output (or a JSON array, compact or pretty) - see below. |
-| `nshbox nslookup [--json\|--JSON] [-type=A\|CNAME\|MX\|TXT] <name>` | no | DNS lookup, `nslookup`-style output (or a JSON array, compact or pretty) - see below. |
+| `nshbox dig [--json\|--JSON] <name> [A\|CNAME\|MX\|TXT\|PTR]` / `dig -x <ip>` | no | DNS lookup, `dig`-style simplified ANSWER SECTION output (or a JSON array, compact or pretty); `-x` = reverse lookup, IP to name - see below. |
+| `nshbox nslookup [--json\|--JSON] [-type=A\|CNAME\|MX\|TXT\|PTR] <name\|ip>` | no | DNS lookup, `nslookup`-style output (or a JSON array, compact or pretty); an IP address is looked up in reverse - see below. |
 | `nshbox install [-f] [-q]` | **yes** | Create BusyBox-style applet symlinks - see below. |
 
 Four commands mutate device state: `install` (creates symlinks in its own directory), `tee` (writes files when
@@ -456,16 +456,24 @@ correct, refine later if it matters" approach the rest of `nshbox` has followed 
 
 ## dig and nslookup
 
-Two front-ends over one shared backend: both query DNS the same way and support the same four record types (`A`,
-`CNAME`, `MX`, `TXT`), differing only in how they format the result - `dig` as a simplified `;; ANSWER SECTION:`
-listing, `nslookup` as `Name:`/`Address:`-style lines (or `canonical name =`/`mail exchanger =`/`text =` for
-`CNAME`/`MX`/`TXT`). `nslookup`'s `-type=` is case-insensitive (`-type=mx` and `-type=MX` both work). `--json` on
+Two front-ends over one shared backend: both query DNS the same way and support the same five record types (`A`,
+`CNAME`, `MX`, `TXT`, `PTR`), differing only in how they format the result - `dig` as a simplified
+`;; ANSWER SECTION:` listing, `nslookup` as `Name:`/`Address:`-style lines (or `canonical name =`/
+`mail exchanger =`/`text =`/`name =` for `CNAME`/`MX`/`TXT`/`PTR`). `nslookup`'s `-type=` is case-insensitive (`-type=mx` and `-type=MX` both work). `--json` on
 either one emits the exact same JSON array shape (`[{"name":...,"ttl":...,"type":...,"data":...}, ...]`) - there is
 no reason for the two commands' machine-readable output to disagree just because their plain-text output does. The
 flag can appear anywhere among the other arguments (`dig --json example.com MX` and `dig example.com --json MX`
 both work). On a failed or empty lookup, `--json` still prints a valid `[]` to stdout - success/failure is signaled
 the normal way, via the exit code and an stderr message, not by stdout being unparseable. `--JSON`/`--Json` work
 here too, exactly like on every other `--json`-supporting command - see `json` below.
+
+**Reverse lookups (IP to name):** `dig -x 192.0.2.10` and `nslookup 192.0.2.10` build the `in-addr.arpa` name
+(`10.2.0.192.in-addr.arpa`) and ask for its `PTR` record. IPv6 works too: the address becomes 32 dot-separated
+nibbles, least significant first, under `ip6.arpa`. `nslookup` reverses automatically whenever its argument is an
+IP address, as the real one does; `dig` needs `-x`, and `-x` takes exactly one address and no record type. Both also
+accept a `PTR` type directly (`dig 10.2.0.192.in-addr.arpa PTR`) for a name you built yourself. The `PTR` answer's
+`data` is the host name, so `--json` gives `{"name":"10.2.0.192.in-addr.arpa","ttl":...,"type":"PTR","data":"host.example.com"}`.
+An address with no `PTR` record fails like any other empty lookup: message on stderr, `[]` with `--json`, exit 1.
 
 Queries go through glibc's own stub resolver (`res_query()`, then `ns_initparse()`/`ns_parserr()` to walk the
 answer section, `dn_expand()` to decode compressed domain names in `CNAME`/`MX` records) rather than a hand-rolled
