@@ -27,15 +27,14 @@
  *   nshbox vmstat [delay [count]]
  *   nshbox iostat [delay [count]]
  *   nshbox top [-m] [-l lines] [delay [count]]
- *   nshbox netstat
- *   nshbox netstat -l
+ *   nshbox netstat [-l] [--json]
  *   nshbox readlink [-f] <path>
  *   nshbox realpath <path> [...]
  *   nshbox grep [-invqcErl] pattern [file ...]
  *   nshbox strings [-n min] [file ...]
  *   nshbox hexdump [file]
  *   nshbox file [-bL] file ...
- *   nshbox stat <file> [...]
+ *   nshbox stat [--json] <file> [...]
  *   nshbox head [-n lines] [file ...]
  *   nshbox tail [-n lines] [file ...]
  *   nshbox wc [-lwc] [file ...]
@@ -46,11 +45,11 @@
  *   nshbox sleep SECONDS
  *   nshbox uptime [--json]
  *   nshbox du [-hsb] [--json] [path ...]
- *   nshbox sha256sum [file ...]
- *   nshbox sha1sum [file ...]
- *   nshbox sha384sum [file ...]
- *   nshbox sha512sum [file ...]
- *   nshbox md5sum [file ...]
+ *   nshbox sha256sum [--json] [file ...]
+ *   nshbox sha1sum [--json] [file ...]
+ *   nshbox sha384sum [--json] [file ...]
+ *   nshbox sha512sum [--json] [file ...]
+ *   nshbox md5sum [--json] [file ...]
  *   nshbox base64 [-d] [-u] [-w cols] [file]
  *   nshbox jwt [--all|--header] [token]
  *   nshbox json [file]
@@ -97,7 +96,7 @@
 #include <netdb.h>
 
 
-#define NSHBOX_VERSION    "0.5"
+#define NSHBOX_VERSION    "0.6"
 
 
 typedef int (*command_func_t)(int argc, char **argv);
@@ -386,17 +385,24 @@ static int parse_tcp_line(const char *line, tcp_socket_t *sock)
 /* netstat                                                            */
 /* ------------------------------------------------------------------ */
 
+static void json_print_string(const char *s);
+
 static int cmd_netstat(int argc, char **argv)
 {
     FILE *f;
     char line[512];
     int listeners_only = 0;
+    int json = 0;
+    int first = 1;
+    int i;
 
-    if (argc > 1) {
-        if (strcmp(argv[1], "-l") == 0)
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-l") == 0) {
             listeners_only = 1;
-        else {
-            fprintf(stderr, "Usage: nshbox netstat [-l]\n");
+        } else if (strcmp(argv[i], "--json") == 0) {
+            json = 1;
+        } else {
+            fprintf(stderr, "Usage: nshbox netstat [-l] [--json]\n");
             return 1;
         }
     }
@@ -414,16 +420,19 @@ static int cmd_netstat(int argc, char **argv)
         return 1;
     }
 
-    printf(
-        "%-6s %-22s %-22s %-13s %-8s %-6s %s\n",
-        "PROTO",
-        "LOCAL",
-        "REMOTE",
-        "STATE",
-        "INODE",
-        "PID",
-        "PROCESS"
-    );
+    if (json)
+        putchar('[');
+    else
+        printf(
+            "%-6s %-22s %-22s %-13s %-8s %-6s %s\n",
+            "PROTO",
+            "LOCAL",
+            "REMOTE",
+            "STATE",
+            "INODE",
+            "PID",
+            "PROCESS"
+        );
 
     while (fgets(line, sizeof(line), f)) {
         tcp_socket_t sock;
@@ -455,6 +464,43 @@ static int cmd_netstat(int argc, char **argv)
             remote_ip,
             sizeof(remote_ip)
         );
+
+        if (json) {
+            /* Address and port as separate fields - a consumer would
+             * otherwise have to split "ip:port" itself. pid/process
+             * follow this project's --json missing-value rule (see
+             * sysinfo): key always present, "" when unknown, never
+             * null or 0. read_cmdline()'s own "?" placeholder for an
+             * unreadable /proc entry counts as unknown here too. */
+            char cmd[256];
+
+            pid = find_socket_pid(sock.inode);
+            cmd[0] = '\0';
+
+            if (pid >= 0)
+                read_cmdline(pid, cmd, sizeof(cmd));
+
+            if (!first)
+                putchar(',');
+            first = 0;
+
+            printf("{\"proto\":\"tcp\",\"local_address\":\"%s\",\"local_port\":%u,"
+                   "\"remote_address\":\"%s\",\"remote_port\":%u,"
+                   "\"state\":\"%s\",\"inode\":%lu,\"pid\":",
+                   local_ip, sock.local_port,
+                   remote_ip, sock.remote_port,
+                   tcp_state_name(sock.state), sock.inode);
+
+            if (pid >= 0)
+                printf("%d", pid);
+            else
+                fputs("\"\"", stdout);
+
+            fputs(",\"process\":", stdout);
+            json_print_string(strcmp(cmd, "?") == 0 ? "" : cmd);
+            putchar('}');
+            continue;
+        }
 
         snprintf(
             local,
@@ -495,6 +541,9 @@ static int cmd_netstat(int argc, char **argv)
     }
 
     fclose(f);
+
+    if (json)
+        fputs("]\n", stdout);
 
     return 0;
 }
@@ -3668,21 +3717,58 @@ static void mode_string(mode_t mode, char out[11])
     out[10] = '\0';
 }
 
+static const char *file_type_name(mode_t mode)
+{
+    if (S_ISREG(mode))  return "file";
+    if (S_ISDIR(mode))  return "directory";
+    if (S_ISLNK(mode))  return "symlink";
+    if (S_ISCHR(mode))  return "char_device";
+    if (S_ISBLK(mode))  return "block_device";
+    if (S_ISFIFO(mode)) return "fifo";
+    if (S_ISSOCK(mode)) return "socket";
+    return "unknown";
+}
+
+/* --json: one array of objects, one per file that could be stat'ed (an
+ * unreadable path gets its usual message on stderr and a non-zero exit,
+ * no entry - same as the text output, which prints nothing for it on
+ * stdout either). "mode" is the octal permission string exactly as text
+ * mode shows it (JSON has no octal literal); "mtime" is text mode's own
+ * formatted string, "mtime_epoch" the same instant as a plain number for
+ * consumers that would rather not parse it. Missing-value rule as for
+ * sysinfo: "" if the time cannot be formatted, key always present. */
 static int cmd_stat(int argc, char **argv)
 {
     int i;
     int rc = 0;
+    int json = 0;
+    int files = 0;
+    int count = 0;
 
-    if (argc < 2) {
-        fprintf(stderr, "Usage: nshbox stat <file> [...]\n");
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--json") == 0)
+            json = 1;
+        else
+            files++;
+    }
+
+    if (files == 0) {
+        fprintf(stderr, "Usage: nshbox stat [--json] <file> [...]\n");
         return 1;
     }
+
+    if (json)
+        putchar('[');
 
     for (i = 1; i < argc; i++) {
         struct stat st;
         char mode[11];
         char timebuf[64] = "?";
+        int have_time = 0;
         struct tm tm;
+
+        if (strcmp(argv[i], "--json") == 0)
+            continue;
 
         if (lstat(argv[i], &st) < 0) {
             perror(argv[i]);
@@ -3691,8 +3777,30 @@ static int cmd_stat(int argc, char **argv)
         }
 
         mode_string(st.st_mode, mode);
-        if (localtime_r(&st.st_mtime, &tm))
+        if (localtime_r(&st.st_mtime, &tm)) {
             strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S %z", &tm);
+            have_time = 1;
+        }
+
+        if (json) {
+            if (count > 0)
+                putchar(',');
+            count++;
+
+            fputs("{\"file\":", stdout);
+            json_print_string(argv[i]);
+            printf(",\"type\":\"%s\",\"size\":%lld,\"mode\":\"%04o\",\"mode_string\":\"%s\","
+                   "\"uid\":%lu,\"gid\":%lu,\"links\":%lu,\"mtime\":",
+                   file_type_name(st.st_mode),
+                   (long long)st.st_size,
+                   (unsigned)(st.st_mode & 07777), mode,
+                   (unsigned long)st.st_uid,
+                   (unsigned long)st.st_gid,
+                   (unsigned long)st.st_nlink);
+            json_print_string(have_time ? timebuf : "");
+            printf(",\"mtime_epoch\":%lld}", (long long)st.st_mtime);
+            continue;
+        }
 
         printf("  File: %s\n", argv[i]);
         printf("  Size: %lld\n", (long long)st.st_size);
@@ -3705,12 +3813,15 @@ static int cmd_stat(int argc, char **argv)
             putchar('\n');
     }
 
+    if (json)
+        fputs("]\n", stdout);
+
     return rc;
 }
 
 
 /* ------------------------------------------------------------------ */
-/* head / tail                                                        */
+/* head / tail                                                      */
 /* ------------------------------------------------------------------ */
 
 static int parse_line_count(int argc, char **argv, long default_n, long *count, int *first_file)
@@ -6441,7 +6552,14 @@ static int cmd_tar(int argc, char **argv)
 /* sha256sum / sha1sum / sha512sum / md5sum                           */
 /* ------------------------------------------------------------------ */
 
-static int hash_stream(FILE *f, const char *display_name, const EVP_MD *md)
+/* --json: one array of {"file","algorithm","digest"} objects, one per
+ * file actually hashed. *count is how many entries have been emitted so
+ * far (drives the comma between them); ignored in plain text mode. A file
+ * that cannot be read gets its usual message on stderr and a non-zero
+ * exit, and no entry - same as text mode, which prints nothing on stdout
+ * for it either, so "digest" is always a real digest, never a placeholder. */
+static int hash_stream(FILE *f, const char *display_name, const EVP_MD *md,
+                       const char *algo, int json, int *count)
 {
     EVP_MD_CTX *ctx;
     unsigned char buf[65536];
@@ -6485,6 +6603,22 @@ static int hash_stream(FILE *f, const char *display_name, const EVP_MD *md)
 
     EVP_MD_CTX_free(ctx);
 
+    if (json) {
+        if (*count > 0)
+            putchar(',');
+        (*count)++;
+
+        fputs("{\"file\":", stdout);
+        json_print_string(display_name);
+        printf(",\"algorithm\":\"%s\",\"digest\":\"", algo);
+
+        for (i = 0; i < digest_len; i++)
+            printf("%02x", digest[i]);
+
+        fputs("\"}", stdout);
+        return 0;
+    }
+
     for (i = 0; i < digest_len; i++)
         printf("%02x", digest[i]);
 
@@ -6492,63 +6626,83 @@ static int hash_stream(FILE *f, const char *display_name, const EVP_MD *md)
     return 0;
 }
 
-static int hash_main(int argc, char **argv, const EVP_MD *md)
+static int hash_main(int argc, char **argv, const EVP_MD *md, const char *algo)
 {
     int rc = 0;
+    int json = 0;
+    int count = 0;
+    int files = 0;
     int i;
 
-    if (argc == 1)
-        return hash_stream(stdin, "-", md);
-
     for (i = 1; i < argc; i++) {
-        FILE *f;
-
-        if (strcmp(argv[i], "-") == 0) {
-            if (hash_stream(stdin, "-", md) != 0)
-                rc = 1;
-            continue;
-        }
-
-        f = fopen(argv[i], "rb");
-
-        if (f == NULL) {
-            perror(argv[i]);
-            rc = 1;
-            continue;
-        }
-
-        if (hash_stream(f, argv[i], md) != 0)
-            rc = 1;
-
-        fclose(f);
+        if (strcmp(argv[i], "--json") == 0)
+            json = 1;
+        else
+            files++;
     }
+
+    if (json)
+        putchar('[');
+
+    if (files == 0) {
+        rc = hash_stream(stdin, "-", md, algo, json, &count);
+    } else {
+        for (i = 1; i < argc; i++) {
+            FILE *f;
+
+            if (strcmp(argv[i], "--json") == 0)
+                continue;
+
+            if (strcmp(argv[i], "-") == 0) {
+                if (hash_stream(stdin, "-", md, algo, json, &count) != 0)
+                    rc = 1;
+                continue;
+            }
+
+            f = fopen(argv[i], "rb");
+
+            if (f == NULL) {
+                perror(argv[i]);
+                rc = 1;
+                continue;
+            }
+
+            if (hash_stream(f, argv[i], md, algo, json, &count) != 0)
+                rc = 1;
+
+            fclose(f);
+        }
+    }
+
+    if (json)
+        fputs("]\n", stdout);
 
     return rc;
 }
 
 static int cmd_sha256sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_sha256());
+    return hash_main(argc, argv, EVP_sha256(), "sha256");
 }
 
 static int cmd_sha1sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_sha1());
+    return hash_main(argc, argv, EVP_sha1(), "sha1");
 }
 
 static int cmd_sha384sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_sha384());
+    return hash_main(argc, argv, EVP_sha384(), "sha384");
 }
 
 static int cmd_sha512sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_sha512());
+    return hash_main(argc, argv, EVP_sha512(), "sha512");
 }
 
 static int cmd_md5sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_md5());
+    return hash_main(argc, argv, EVP_md5(), "md5");
 }
 
 /*
@@ -7079,7 +7233,7 @@ static const command_t commands[] = {
     { "vmstat",   cmd_vmstat,   "Show procs/memory/swap/io/cpu stats [delay [count]]" },
     { "iostat",   cmd_iostat,   "Show per-device disk transfer/await/util stats [delay [count]]" },
     { "top",      cmd_top,      "List processes by CPU or memory usage (-m, -l lines) [delay [count]]" },
-    { "netstat",  cmd_netstat,  "Show TCP sockets (-l = listeners)" },
+    { "netstat",  cmd_netstat,  "Show TCP sockets (-l = listeners) [--json]" },
     { "readlink", cmd_readlink, "Display link target (-f = canonical path)" },
     { "realpath", cmd_realpath, "Print resolved absolute path" },
     { "dirname",  cmd_dirname,  "Strip last path component" },
@@ -7087,7 +7241,7 @@ static const command_t commands[] = {
     { "strings",  cmd_strings,  "Print strings (-n min)" },
     { "hexdump",  cmd_hexdump,  "Hex/ASCII dump" },
     { "file",     cmd_file,     "Identify file type (-b brief, -L follow links)" },
-    { "stat",     cmd_stat,     "Show file information" },
+    { "stat",     cmd_stat,     "Show file information [--json]" },
     { "head",     cmd_head,     "Show first lines (-n lines)" },
     { "tail",     cmd_tail,     "Show last lines (-n lines)" },
     { "wc",       cmd_wc,       "Count lines/words/bytes (-lwc)" },
@@ -7102,11 +7256,11 @@ static const command_t commands[] = {
     { "tree",     cmd_tree,     "Show a directory tree, box-drawing style [-L level] [path]" },
     { "tar",      cmd_tar,      "Create/extract/list a ustar archive (-cxt[zv] -f archive [-C dir] [path ...])" },
     { "iotest",   cmd_iotest,   "Sequential read/write throughput test (-w file size|-t s|-n N [cap] | -r file)" },
-    { "sha256sum",cmd_sha256sum,"Print SHA-256 checksums" },
-    { "sha1sum",  cmd_sha1sum,  "Print SHA-1 checksums" },
-    { "sha384sum",cmd_sha384sum,"Print SHA-384 checksums" },
-    { "sha512sum",cmd_sha512sum,"Print SHA-512 checksums" },
-    { "md5sum",   cmd_md5sum,   "Print MD5 checksums" },
+    { "sha256sum",cmd_sha256sum,"Print SHA-256 checksums [--json]" },
+    { "sha1sum",  cmd_sha1sum,  "Print SHA-1 checksums [--json]" },
+    { "sha384sum",cmd_sha384sum,"Print SHA-384 checksums [--json]" },
+    { "sha512sum",cmd_sha512sum,"Print SHA-512 checksums [--json]" },
+    { "md5sum",   cmd_md5sum,   "Print MD5 checksums [--json]" },
     { "base64",   cmd_base64,   "Base64 encode/decode (-d decode, -u URL-safe alphabet, -w cols wrap, 0 = no wrap) [file]" },
     { "jwt",      cmd_jwt,      "Decode a JWT's payload (--header for header, --all for both) - no signature verification [token]" },
     { "json",     cmd_json,     "Pretty-print JSON, 2-space indent [file]" },
@@ -7308,7 +7462,8 @@ static void usage(void)
 /* ------------------------------------------------------------------ */
 
 /* "--JSON"/"--Json" is an opt-in pretty-printed variant of whichever
- * --json a command already supports (ps/du/find/dig/nslookup/uptime) -
+ * --json a command already supports (ps/du/find/dig/nslookup/uptime/
+ * sysinfo/netstat/stat/the checksum commands) -
  * reusing json_pretty_print() rather than teaching each of those
  * commands its own separate pretty-printing path. Rewrites the matched
  * argv entry to "--json" in place, so the target command's own,

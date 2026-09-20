@@ -33,11 +33,13 @@ would need shape/sanity assertions instead, not covered here yet.
 ## Current coverage
 
 `grep`, `wc`, `sort`, `head`, `tail`, `dirname`, `stat` (field-by-field via `stat --format=...`, not a raw diff -
-nshbox's own format is intentionally custom, not GNU `stat`'s), `tar` (round-trips both directions plus gzip, not a
+nshbox's own format is intentionally custom, not GNU `stat`'s; `--json` is diffed as one exact line assembled from
+real `stat`/`date` output), `tar` (round-trips both directions plus gzip, not a
 raw archive-byte diff - two implementations can produce byte-different but equally valid ustar archives), `realpath`,
 `readlink`, `du` (`-b` apparent-size only, not the default block-count mode, which depends on the filesystem's own
 block size), `find`, `tree` (see its own notes below), `pstree` (see its own notes below too), `ps` (see its own
-notes below too), `sha256sum`/`sha1sum`/`sha384sum`/`sha512sum`/`md5sum`, `which`, `tee`, `base64` (standard
+notes below too), `netstat` (a listening socket the test opens itself on port 0, so the owning pid is known;
+see test_netstat.cpp), `sha256sum`/`sha1sum`/`sha384sum`/`sha512sum`/`md5sum` (including `--json`), `which`, `tee`, `base64` (standard
 encode/decode diffed against real `base64`, `-u` diffed against real `basenc --base64url` - GNU `base64` itself has
 no URL-safe mode), `jwt` (no reference CLI tool exists for this one - diffed against the well-known jwt.io sample
 token instead, plus tokens this suite builds itself with `nshbox base64 -u`, which doubles as an end-to-end check
@@ -45,7 +47,7 @@ that `jwt` and `base64 -u` agree), `json` (hardcoded expected output, cross-chec
 json.tool --indent 2` during development rather than diffed live - no JSON tool is guaranteed present in this
 harness's own container; also covers the shared `-JSON`/`-Json` dispatch mechanism other commands opt into, via
 one representative command rather than testing it per command - see test_json.cpp). Not yet covered: `strings`,
-`hexdump`, `file`, and the rest of the live-state commands (`sysinfo`, `free`, `vmstat`, `iostat`, `top`, `netstat`,
+`hexdump`, `file`, and the rest of the live-state commands (`sysinfo`, `free`, `vmstat`, `iostat`, `top`,
 `uptime` - see below for why `ps` and `pstree` didn't have to wait for those). Extending coverage is just adding
 another `test_*.cpp` file (see below) - no other file needs to change.
 

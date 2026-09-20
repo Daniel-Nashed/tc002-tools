@@ -26,7 +26,7 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 | `nshbox vmstat [delay [count]]` | no | procs/memory/swap/io/system/cpu stats, `vmstat`-style - see below. |
 | `nshbox iostat [delay [count]]` | no | Per-device transfer/await/queue/util stats, `iostat -x`-style - see below. |
 | `nshbox top [-m] [delay [count]]` | no | Processes by CPU (default) or memory (`-m`) usage - see below. |
-| `nshbox netstat [-l]` | no | List TCP sockets with owning PID; `-l` filters to listeners. |
+| `nshbox netstat [-l] [--json\|--JSON]` | no | List TCP sockets with owning PID; `-l` filters to listeners (or a JSON array, compact or pretty) - see below. |
 | `nshbox readlink [-f] <path>` | no | Symlink target; `-f` resolves to a canonical absolute path. |
 | `nshbox realpath <path> [...]` | no | Resolved absolute path for each argument. |
 | `nshbox dirname <path> [...]` | no | Strip the last path component; matches GNU coreutils `dirname(1)`, not libgen.h's `dirname(3)`. |
@@ -34,7 +34,7 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 | `nshbox strings [-n min] [file ...]` | no | Printable-character runs of at least `min` length. |
 | `nshbox hexdump [file]` | no | Hex/ASCII dump, 16 bytes per line. |
 | `nshbox file [-bL] file ...` | no | Identify file type, with real ELF detail - see below. |
-| `nshbox stat <file> [...]` | no | Size, mode, owner, link count, mtime, via `lstat()`. |
+| `nshbox stat [--json\|--JSON] <file> [...]` | no | Size, mode, owner, link count, mtime, via `lstat()` (or a JSON array, compact or pretty) - see below. |
 | `nshbox head [-n lines] [file ...]` | no | First N lines (default 10). |
 | `nshbox tail [-n lines] [file ...]` | no | Last N lines (default 10), fixed-size ring buffer. |
 | `nshbox wc [-lwc] [file ...]` | no | Line/word/byte counts. |
@@ -49,11 +49,11 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 | `nshbox tree [-L level] [path]` | no | Directory tree, box-drawing style (same connectors as `pstree`'s fancy renderer); shows symlink targets, `-L` caps display depth - see below. |
 | `nshbox tar -c\|-x\|-t[zv] -f archive [-C dir] [path ...]` | **yes** (`-c`/`-x` only) | ustar archive; `-z`/`.tar.gz`/`.tgz`/`.taz` via `gzip` in `PATH`; `-v` lists names to stderr; extract/list can name specific members - see below. |
 | `nshbox iotest -w <file> <size>` / `-r <file>` | **yes** | Sequential storage throughput test - see below. |
-| `nshbox sha256sum [file ...]` | no | SHA-256 checksums, coreutils-output-compatible. |
-| `nshbox sha1sum [file ...]` | no | SHA-1 checksums, coreutils-output-compatible. |
-| `nshbox sha384sum [file ...]` | no | SHA-384 checksums, coreutils-output-compatible. |
-| `nshbox sha512sum [file ...]` | no | SHA-512 checksums, coreutils-output-compatible. |
-| `nshbox md5sum [file ...]` | no | MD5 checksums, coreutils-output-compatible. |
+| `nshbox sha256sum [--json\|--JSON] [file ...]` | no | SHA-256 checksums, coreutils-output-compatible (or a JSON array, compact or pretty) - see below. |
+| `nshbox sha1sum [--json\|--JSON] [file ...]` | no | SHA-1 checksums, coreutils-output-compatible (or a JSON array, compact or pretty). |
+| `nshbox sha384sum [--json\|--JSON] [file ...]` | no | SHA-384 checksums, coreutils-output-compatible (or a JSON array, compact or pretty). |
+| `nshbox sha512sum [--json\|--JSON] [file ...]` | no | SHA-512 checksums, coreutils-output-compatible (or a JSON array, compact or pretty). |
+| `nshbox md5sum [--json\|--JSON] [file ...]` | no | MD5 checksums, coreutils-output-compatible (or a JSON array, compact or pretty). |
 | `nshbox base64 [-d] [-u] [-w cols] [file]` | no | Base64 encode/decode; `-u` for the URL-safe alphabet, `-w` to change/disable line-wrapping - see below. |
 | `nshbox jwt [--all\|--header] [token]` | no | Decode a JWT's payload (`--header` for header, `--all` for both) as raw JSON - no signature verification - see below. |
 | `nshbox json [file]` | no | Pretty-print JSON, 2-space indent - reads stdin or a file; also available as `--JSON`/`--Json` on any command above that supports `--json` - see below. |
@@ -148,7 +148,7 @@ independently rather than sharing a flag whose meaning would subtly differ betwe
 
 ```text
 
-nshbox 0.5
+nshbox 0.6
 
 System:        Linux
 Node:          flythings
@@ -556,7 +556,8 @@ correctness are not validated - malformed input may produce malformed-looking ou
 the way `jq` would give one. Unbalanced brackets (missing or extra `}`/`]`) are the one thing that **is** always
 caught and reported as an error, since those are cheap to track anyway as part of the indentation logic itself.
 
-Every command above that supports `--json` (`ps`/`du`/`find`/`dig`/`nslookup`/`uptime`) also accepts `--JSON` or
+Every command above that supports `--json` (`ps`/`du`/`find`/`dig`/`nslookup`/`uptime`/`sysinfo`/`netstat`/`stat`
+and the checksum commands) also accepts `--JSON` or
 `--Json` as a drop-in replacement for `--json` that pretty-prints instead of the normal compact, single-line
 output - reusing this exact same `json_pretty_print()` function, not a second implementation: the target command
 runs completely unchanged (including its own `--json`-branch, which is what `--JSON`/`--Json` gets rewritten to
@@ -567,6 +568,37 @@ output it always was, so nothing that already parses it needs to change. One acc
 rewrite happens before the target command sees its own arguments, a literal `--JSON`/`--Json` intended as a genuine
 argument to some other command (e.g. a `grep` pattern) would be misread as this flag instead - accepted since both
 spellings are unusual enough in practice, and this is opt-in, to not be worth a per-command allowlist.
+
+## JSON output of netstat, stat and the checksum commands
+
+All three emit one array of flat objects, always an array even for a single file, `[]` when nothing matched. Where
+a value can be missing, the key is still present and holds `""` - never `null`, never `0` - the same rule as
+`sysinfo --json`.
+
+```sh
+nshbox netstat -l --JSON
+# [{"proto":"tcp","local_address":"0.0.0.0","local_port":22,"remote_address":"0.0.0.0","remote_port":0,
+#   "state":"LISTEN","inode":1234,"pid":321,"process":"dropbear ..."}]
+
+nshbox stat --JSON /data/bin/nshbox
+# [{"file":"/data/bin/nshbox","type":"file","size":123456,"mode":"0755","mode_string":"-rwxr-xr-x",
+#   "uid":0,"gid":0,"links":1,"mtime":"2026-09-20 10:00:00 +0000","mtime_epoch":1789898400}]
+
+nshbox sha256sum --JSON /data/bin/nshbox
+# [{"file":"/data/bin/nshbox","algorithm":"sha256","digest":"<hex>"}]
+```
+
+- **`netstat`**: address and port are separate fields (`local_address`/`local_port`, `remote_address`/
+  `remote_port`) instead of the text output's combined `ip:port`. `pid` and `process` are `""` when no owning
+  process could be found, where the text output shows `-` and `?`.
+- **`stat`**: `type` is `file`, `directory`, `symlink`, `char_device`, `block_device`, `fifo`, or `socket`. `mode`
+  is the octal permission string exactly as the text output shows it (JSON has no octal literal); `mtime_epoch` is
+  the same instant as a plain number.
+- **Checksums**: `algorithm` is `sha256`, `sha1`, `sha384`, `sha512`, or `md5`, so output from several of these
+  commands can be merged into one list. Reading from stdin gives `"file":"-"`, as in the text output.
+- **Unreadable files** (for `stat` and the checksum commands) get their usual message on stderr and a non-zero exit
+  code and are left out of the array, just as the text output prints nothing on stdout for them - so `digest` is
+  always a real digest and never a placeholder. Success or failure is the exit code, not the shape of stdout.
 
 ## Installing symlinks
 
