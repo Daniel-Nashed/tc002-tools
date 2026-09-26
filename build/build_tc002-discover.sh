@@ -39,8 +39,7 @@ configure_and_build()
   # way to build it. -static: a genuinely portable binary with zero
   # runtime dependencies, matching this project's established static-
   # linking risk-avoidance reasoning (see openssl/README.md) - here
-  # against musl rather than glibc, which was designed for exactly this
-  # and carries none of glibc's own static-linking caveats (no NSS/
+  # against musl, which is designed for static linking (no NSS/
   # getpwuid-style warnings - this program does not call anything like
   # that anyway). -s: strip at link time, same as 7zip's own build (see
   # 7zip/README.md) - no separate strip step needed afterward.
@@ -107,7 +106,7 @@ write_manifest()
   local commit
   commit="$(project_git_commit)"
   local cc_version
-  cc_version="$(cc --version | head -n1)"
+  cc_version="$(cc --version | sed -n '1p')"
   local size
   size="$(stat -c%s "$path")"
   local sha256

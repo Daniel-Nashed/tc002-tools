@@ -311,7 +311,9 @@ SUCH DAMAGE.
 mbedTLS's `LICENSE` file (version pinned in [build/build_mbedtls.sh](build/build_mbedtls.sh)) offers a choice of two
 licenses - Apache-2.0 or GPL-2.0-or-later ("Copyright The Mbed TLS Contributors", per its own source file headers).
 This project takes it under Apache-2.0, matching `tc002-tools`'s own license (see [LICENSE](LICENSE)), and
-reproduces that license verbatim below rather than also reproducing the unused GPL-2.0-or-later alternative:
+reproduces that license verbatim below rather than also reproducing the unused GPL-2.0-or-later alternative. mbedTLS
+is statically linked into `curl` and, for the checksum commands' digest functions (MD5, SHA-1, SHA-256, SHA-384,
+SHA-512), into `nshbox`:
 
 ```text
                                  Apache License

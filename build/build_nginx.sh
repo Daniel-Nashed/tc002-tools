@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Cross-builds nginx for the TC002 (arm-linux-gnueabihf). Minimal module
+# Cross-builds nginx for the TC002 (arm-linux-musleabihf), FULLY STATIC, with the
+# musl toolchain in build/docker-alpine-arm. Minimal module
 # set, no PCRE - see nginx/README.md for why. gzip is kept (zlib
 # statically linked, like curl - see curl/README.md). TLS is OpenSSL,
 # statically linked against build_openssl.sh's own build (this depends
@@ -16,21 +17,26 @@ source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
 #
-# 1.31.5 (nginx.org's current "Mainline" label), not the 1.30.x "Stable"
+# 1.31.6 (nginx.org's current "Mainline" label; 1.31.5 before, bumped 2026-09-25), not the 1.30.x "Stable"
 # line this project first pinned - a deliberate, explicit exception to
 # this project's usual stable-over-bleeding-edge default (Dropbear,
 # curl), made once OpenSSL was bumped to 4.0.2 (see build_openssl.sh):
 # both are genuinely the latest available release of each project as of
 # 2026-09-13, checked directly against nginx.org's own download page and
 # OpenSSL's real GitHub releases (4.1.0 exists only as an alpha).
-NGINX_VERSION="1.31.5"
+NGINX_VERSION="1.31.6"
 NGINX_TARBALL="nginx-${NGINX_VERSION}.tar.gz"
 NGINX_URL="https://nginx.org/download/${NGINX_TARBALL}"
 
-# Verified 2026-09-13 by downloading the release tarball directly from
-# nginx.org and computing its SHA-256. Re-verify independently before
+# Verified 2026-09-25 by downloading the release tarball directly from
+# nginx.org and computing its SHA-256, and by checking its detached PGP
+# signature (nginx-1.31.6.tar.gz.asc): "Good signature" from Sergey
+# Kandaurov <s.kandaurov@f5.com>, primary key fingerprint
+# D678 6CE3 03D9 A902 2998 DC6C C846 4D54 9AF7 5C0A (key file taken from
+# nginx.org/keys/pluknet.key - compare that fingerprint with the one on
+# nginx.org/en/pgp_keys.html yourself). Re-verify independently before
 # relying on this for anything security-sensitive.
-NGINX_SHA256="e951607d534836624bd36b6b45a71dbfb055237deae3738da6bbf3270dada279"
+NGINX_SHA256="974ed5298a5e398e008704ed5db284e655fc270c596493dbccada452448fc9f1"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
@@ -176,7 +182,7 @@ configure_and_build()
   #   own configure accepts this combination cleanly - tested natively,
   #   2026-09-12).
   # - --without-ssi/--userid/--auth_basic/--mirror/--autoindex/--geo/
-  #   --map/--split_clients/--referer/--fastcgi/--uwsgi/--scgi/--grpc/
+  #   --split_clients/--referer/--fastcgi/--uwsgi/--scgi/--grpc/
   #   --memcached/--limit_conn/--limit_req/--empty_gif/--browser/all
   #   --upstream_* extras: niche features not relevant to a small
   #   embedded proxy/status use case. Confirmed via an actual native
@@ -211,20 +217,79 @@ configure_and_build()
   # (--without-tls) - falls back to nginx's original pre-OpenSSL
   # configure flags, no --with-http_ssl_module at all, matching what
   # this script did before OpenSSL was added.
+  # Compiler and linker options shared by every configure test and the final
+  # link. -static goes into --with-ld-opt on purpose: nginx's configure
+  # COMPILES AND RUNS small test programs even with --crossbuild (see
+  # build/docker-alpine-arm/Dockerfile and the qemu-arm registration in the
+  # root ./build_all.sh), and a dynamic musl test binary would need the ARM
+  # musl loader inside this container - a static one runs as it is under
+  # qemu-user. It is also what makes the nginx binary itself fully static.
+  #
+  # zlib (nginx's gzip) is Alpine's static armv7 zlib from the ARM sysroot;
+  # -latomic is added only when the toolchain really has a static
+  # libatomic.a (OpenSSL 4 may want it on 32-bit ARM). With everything
+  # static, the old objs/Makefile patch that wrapped -lz in
+  # -Bstatic/-Bdynamic is no longer needed.
+  local sysroot="$TC002_MUSL_SYSROOT"
+  local atomic_lib=""
+  local atomic_path
+  atomic_path="$("$TARGET_CC" -print-file-name=libatomic.a)"
+
+  if [ -f "$atomic_path" ]; then
+    atomic_lib="-latomic"
+  fi
+
+  # nginx's configure RUNS its test programs, which are ARM binaries: the
+  # compiler is wrapped (build/qemu-cc-wrapper.sh) so that a test program
+  # named "autotest" becomes a launcher that runs it under qemu-arm with the
+  # toolchain's musl as library root - no binfmt_misc registration on the
+  # host, no privileged container. Everything else (including the final
+  # objs/nginx link) goes straight to the real compiler.
+  local cc_wrapper="${SCRIPT_DIR}/qemu-cc-wrapper.sh"
+  local toolchain_bin toolchain_root
+
+  toolchain_bin="$(command -v "$TARGET_CC")"
+  toolchain_root="$(dirname "$(dirname "$toolchain_bin")")"
+
+  # The test programs are linked -static (see ld_opt below), so they need no
+  # loader at all. For any that are not, qemu-arm needs a root directory in
+  # which the musl loader path (/lib/ld-musl-armhf.so.1) resolves. In musl the
+  # loader IS libc.so; the ld-musl-*.so.1 name is normally a symlink created on
+  # the target system, and musl-cross-make does not create it in the
+  # toolchain. So build a small private root with that symlink.
+  local libc_so="${toolchain_root}/${TARGET_TRIPLE}/lib/libc.so"
+  local qemu_root="${WORK_DIR}/qemu-root"
+
+  rm -rf "$qemu_root"
+  mkdir -p "${qemu_root}/lib"
+
+  if [ -f "$libc_so" ]; then
+    ln -s "$libc_so" "${qemu_root}/lib/ld-musl-armhf.so.1"
+    log "qemu-arm root for nginx's configure test programs: ${qemu_root} (loader -> ${libc_so})"
+  else
+    log "warning: ${libc_so} not found - only static configure test programs can run under qemu-arm (they should all be static, see ld_opt)"
+  fi
+
+  export QEMU_CC_REAL="$TARGET_CC"
+  export QEMU_SYSROOT="$qemu_root"
+
+  local cc_opt="${TARGET_CFLAGS} -I${sysroot}/usr/include"
+  local ld_opt="-static ${TARGET_LDFLAGS_SIZE} -L${sysroot}/usr/lib"
+
   local -a configure_args=(
     --crossbuild="$NGX_CROSSBUILD"
-    --with-cc="$TARGET_CC"
+    --with-cc="$cc_wrapper"
     --prefix="$NGX_PREFIX"
   )
 
   if [ "$NGX_WITH_TLS" -eq 1 ]; then
     configure_args+=(
-      --with-cc-opt="${TARGET_CFLAGS} -I${OPENSSL_INSTALL_DIR}/sdk/include"
-      --with-ld-opt="-L${OPENSSL_INSTALL_DIR}/sdk/lib -Wl,-Bstatic,-latomic,-Bdynamic"
+      --with-cc-opt="${cc_opt} -I${OPENSSL_INSTALL_DIR}/sdk/include"
+      --with-ld-opt="${ld_opt} -L${OPENSSL_INSTALL_DIR}/sdk/lib"
       --with-http_ssl_module
     )
   else
-    configure_args+=( --with-cc-opt="$TARGET_CFLAGS" )
+    configure_args+=( --with-cc-opt="$cc_opt" --with-ld-opt="$ld_opt" )
   fi
 
   configure_args+=(
@@ -236,7 +301,6 @@ configure_and_build()
     --without-http_mirror_module
     --without-http_autoindex_module
     --without-http_geo_module
-    --without-http_map_module
     --without-http_split_clients_module
     --without-http_referer_module
     --without-http_fastcgi_module
@@ -320,31 +384,31 @@ configure_and_build()
 
   log "verified: nginx path prefix is ${NGX_PREFIX}"
 
-  # Statically link zlib (gzip's own dependency), unlike everything else
-  # here (libc, libdl, libpthread stay dynamic) - same reasoning as
-  # curl's static zlib (see curl/README.md): avoid depending on whatever
-  # libz.so.1 the device actually has, after a real on-device curl build
-  # already showed a build-time-vs-device symbol-versioning mismatch for
-  # this exact library.
-  #
-  # Unlike curl, nginx's own build has no libtool anywhere - "$(LINK) ="
-  # is just "$(CC)" directly (confirmed in objs/Makefile, 2026-09-12), so
-  # none of the libtool-specific "-lNAME" reordering that defeated this
-  # same trick for curl applies here (see curl/README.md for that whole
-  # story) - a plain -Wl,-Bstatic/-Wl,-Bdynamic wrap survives untouched.
-  # nginx bakes CORE_LIBS (which is where "-lz" comes from - see
-  # auto/lib/zlib/conf) directly into objs/Makefile's final link recipe
-  # as literal text at configure time, not as a separately overridable
-  # make variable, so the fix is a direct, targeted patch of that
-  # generated file rather than a "make VAR=..." override.
+  # zlib is linked statically by the -static in --with-ld-opt above (only
+  # libz.a exists in the sysroot's library directory as far as -static is
+  # concerned) - confirm the Makefile really links it and the sysroot one.
   local nginx_makefile="${SRC_DIR}/objs/Makefile"
 
   grep -qE -- '-lz\b' "$nginx_makefile" \
-    || die "${nginx_makefile} does not mention -lz as expected - nginx's own zlib detection may have changed since this was last checked; inspect it directly before assuming the sed below is still correct"
+    || die "${nginx_makefile} does not mention -lz as expected - nginx's own zlib detection may have changed since this was last checked, or zlib was not found in ${sysroot}/usr/lib; inspect it and ${configure_log} directly"
 
-  sed -i -E 's/(^|[[:space:]])-lz\b/\1-Wl,-Bstatic -lz -Wl,-Bdynamic/' "$nginx_makefile"
+  log "verified: nginx links zlib (-lz, static via -static)"
 
-  log "patched ${nginx_makefile} to statically link zlib"
+  # libatomic has to come AFTER libcrypto on the link line: with static
+  # archives the linker only takes what earlier objects already asked for,
+  # so a -latomic in --with-ld-opt (which nginx puts before the objects)
+  # would be skipped as unused and OpenSSL's atomic calls left unresolved.
+  # Same kind of targeted patch of the generated objs/Makefile that the old
+  # zlib fix used (nginx bakes its libraries into the link recipe as literal
+  # text at configure time). Only when the toolchain has a libatomic.a.
+  if [ -n "$atomic_lib" ] && [ "$NGX_WITH_TLS" -eq 1 ]; then
+    grep -qE -- '-lcrypto' "$nginx_makefile" \
+      || die "${nginx_makefile} does not mention -lcrypto as expected - cannot place ${atomic_lib} after it; inspect it directly"
+
+    sed -i "s/-lcrypto/-lcrypto ${atomic_lib}/g" "$nginx_makefile"
+
+    log "patched ${nginx_makefile}: ${atomic_lib} now follows -lcrypto"
+  fi
 
   local make_log="${WORK_DIR}/build-nginx-make.log"
   local make_exit=0
@@ -368,57 +432,15 @@ verify_artifact()
   require_cmd readelf
 
   local binary="${SRC_DIR}/objs/nginx"
-  local needed
 
   file -b "$binary" | grep -qi 'ELF' \
     || die "${binary} is not an ELF binary (got: $(file -b "$binary"))"
 
-  needed="$(readelf -d "$binary" 2>/dev/null | grep NEEDED || true)"
-
-  log "dynamic dependencies of ${binary}:"
-  if [ -n "$needed" ]; then
-    echo "$needed" | while IFS= read -r line
-    do
-      log "  ${line}"
-    done
-  else
-    log "  <none>"
-  fi
-
-  if echo "$needed" | grep -qiE 'gnutls|mbedtls|wolfssl|pcre'; then
-    die "nginx has an unexpected TLS- or PCRE-related dynamic dependency - the --without-* configure flags did not fully take effect (see the dependency list logged just above)."
-  fi
-
-  log "verified: no PCRE or non-OpenSSL TLS library linked"
-
-  # OpenSSL is expected to be linked STATICALLY - see build_openssl.sh
-  # and nginx/README.md for why this changed from an earlier dynamic
-  # design (a real on-device "libatomic.so.1: cannot open shared object
-  # file" failure, on top of an already-needed -Wl,-rpath dance - the
-  # same class of risk this project already avoids for curl's mbedTLS).
-  # No dynamic libssl/libcrypto dependency at all is therefore the
-  # correct outcome here, not "linked against the right one" - the
-  # device's own ancient libssl.so.1.1 (OpenSSL 1.1.0i - see
-  # nginx/README.md) is exactly the kind of on-device library this is
-  # meant to never depend on regardless of version.
-  if echo "$needed" | grep -qiE 'libssl\.so|libcrypto\.so'; then
-    die "nginx still has a dynamic libssl/libcrypto dependency - the --with-cc-opt/--with-ld-opt pointing at build_openssl.sh's static sdk/ output may not have taken effect (see the dependency list logged just above)."
-  fi
-
-  if echo "$needed" | grep -qiE 'libatomic\.so'; then
-    die "nginx still has a dynamic libatomic dependency - the -Wl,-Bstatic,-latomic,-Bdynamic override in --with-ld-opt did not fully take effect (see the dependency list logged just above)."
-  fi
-
-  log "verified: OpenSSL (and libatomic) are both statically linked, no dynamic TLS dependency at all"
-
-  # zlib is statically linked (see configure_and_build()'s objs/Makefile
-  # patch) specifically to avoid depending on whatever libz.so.1 happens
-  # to exist on the device - confirm that patch actually took effect.
-  if echo "$needed" | grep -qiE 'libz\.so'; then
-    die "nginx still has a dynamic libz dependency - the objs/Makefile patch in configure_and_build() did not fully take effect (see the dependency list logged just above)."
-  fi
-
-  log "verified: zlib is statically linked"
+  # Fully static: OpenSSL (see build_openssl.sh), zlib, libatomic (if any)
+  # and musl are all linked in - no NEEDED entry at all, no program
+  # interpreter. This also rules out any dynamic libssl/libcrypto/libz/
+  # libatomic/PCRE dependency in one check.
+  verify_static_binary "$binary"
 }
 
 package_artifacts()
@@ -440,7 +462,7 @@ write_manifest()
   local commit
   commit="$(project_git_commit)"
   local cc_version
-  cc_version="$("$TARGET_CC" --version | head -n1)"
+  cc_version="$("$TARGET_CC" --version | sed -n '1p')"
   local size
   size="$(stat -c%s "$path")"
   local sha256
@@ -489,8 +511,15 @@ write_manifest()
 main()
 {
   require_container
+  require_musl_toolchain
+
+  if [ -z "${TC002_MUSL_SYSROOT:-}" ] || [ ! -f "${TC002_MUSL_SYSROOT}/usr/lib/libz.a" ]; then
+    die "static zlib not found in TC002_MUSL_SYSROOT (${TC002_MUSL_SYSROOT:-unset}) - it is installed by build/docker-alpine-arm/Dockerfile; rebuild that image"
+  fi
 
   header "nginx ${NGINX_VERSION}: checking prerequisites"
+  require_cmd readelf
+  require_cmd qemu-arm
   require_cmd sha256sum
   require_cmd tar
   require_cmd "$TARGET_CC"

@@ -26,7 +26,7 @@ reboot - see [After a reboot](#after-a-reboot)) - see [Status](#status) below fo
 
 TC002 devices ship with a network-reachable `adbd`, but without an appropriately secured, standard remote-administration
 service (see [docs/platform.md](docs/platform.md) for what that means in practice). `tc002-tools` provides a minimal,
-dynamically linked Dropbear SSH server for the device's ARMHF environment, using public-key authentication only,
+fully static Dropbear SSH server for the device's ARMHF environment, using public-key authentication only,
 together with scripts that provision and verify it over ADB without replacing original firmware components.
 
 **Not the same device as the Ulanzi TC001** - the TC001 is a completely different, ESP32-based microcontroller
@@ -74,8 +74,9 @@ first use per tool - see [docs/device_layout.md](docs/device_layout.md#deploymen
    listed as its own component above since it's not a tool - see [build/build_ca_bundle.sh](build/build_ca_bundle.sh).
 
 Each component also has its own standalone script (`./build_all.sh build/build_dropbear.sh`, etc.); `./verify.sh`
-checks the results (ARM EABI hard-float, dynamically linked, stripped) without needing the device. See
-[docs/build_platform.md](docs/build_platform.md).
+checks the results (ARM EABI hard-float, fully static, stripped) without needing the device. See
+[docs/build_platform.md](docs/build_platform.md); what changed in the move to one static musl build, and how it works
+now, is in [docs/musl_migration.md](docs/musl_migration.md).
 
 The [optional, compressed-on-demand components](#optional-compressed-on-demand-components) above do not build by
 default - each opts in with its own flag, shown in that table's "How it's built" column. Combine any subset
@@ -89,7 +90,7 @@ never be part of `./build_all.sh`'s device-build pipeline regardless. Run `./bui
 [tc002-discover/README.md](tc002-discover/README.md) for why it builds natively (via a separate Alpine container)
 instead of cross-compiling for the device like everything else here.
 
-(`./test_build_nshbox_x86.sh` is the one script deliberately excluded from `./build_all.sh` permanently - a local x86
+(`./test_build_nshbox_native.sh` is the one script deliberately excluded from `./build_all.sh` permanently - a local native
 dev-only test build, not a deliverable - see [nshbox/README.md](nshbox/README.md).)
 
 ## Testing
@@ -104,6 +105,14 @@ real GNU coreutils/grep, in its own disposable Ubuntu container (see
 [build/docker-ubuntu/README.md](build/docker-ubuntu/README.md) for why a separate container from the ARM cross-build
 one). Tests logic correctness on the host, not device-specific behavior - `verify.sh` and on-device testing still
 cover that side, see [docs/architecture.md](docs/architecture.md).
+
+```sh
+tests/nginx/run_test.sh
+```
+
+Runs the on-device nginx test from your host over `adb`: pushes a ready-made configuration and page, then checks HTTP,
+the `map` module, `stub_status` and HTTPS (forced TLS 1.2 and TLS 1.3) with an RSA and with an ECDSA certificate, and
+reports the device's free memory before and after. See [tests/nginx/README.md](tests/nginx/README.md).
 
 ## Deploying
 
@@ -144,8 +153,8 @@ See [docs/manual_rollout.md](docs/manual_rollout.md) for the full, step-by-step 
 
 ## Supported / tested hardware
 
-Verified on one TC002 device so far: 32-bit ARM hard-float (`arm-linux-gnueabihf`-compatible), matching the Debian
-Buster cross toolchain. See [docs/build_platform.md](docs/build_platform.md) for the commands used to fingerprint a
+Verified on one TC002 device so far: 32-bit ARM hard-float (`arm-linux-musleabihf`, static musl binaries), matching the
+ARM cross toolchain. See [docs/build_platform.md](docs/build_platform.md) for the commands used to fingerprint a
 device before assuming compatibility, and [docs/architecture.md](docs/architecture.md) for what is verified versus
 assumed.
 
@@ -175,7 +184,8 @@ manual - run only after confirming SSH works, from the device itself - see
 
 - [docs/architecture.md](docs/architecture.md) — how the pieces fit together, verified vs. experimental
 - [docs/platform.md](docs/platform.md) — the TC002/FlyThings device itself: how it differs from the TC001, and what `adbd` is and why it matters
-- [docs/build_platform.md](docs/build_platform.md) — setting up the Buster ARMHF cross-build environment
+- [docs/build_platform.md](docs/build_platform.md) — the Alpine/musl ARM cross-build container and how to build
+- [docs/musl_migration.md](docs/musl_migration.md) — what changed in the move to static musl in one Alpine container, and how the build works now
 - [docs/dropbear.md](docs/dropbear.md) — the Dropbear build, its patch, and why
 - [docs/device_layout.md](docs/device_layout.md) — the on-device filesystem layout this project uses
 - [docs/manual_rollout.md](docs/manual_rollout.md) — step-by-step provisioning on a single device

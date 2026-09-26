@@ -1,7 +1,7 @@
 # Native (not cross-compile) build platform for tc002-discover - the one
 # component in this project that is NOT a TC002 deliverable. Every other
-# build_*.sh here cross-compiles FOR the device (arm-linux-gnueabihf, via
-# build/docker's Debian Buster image); tc002-discover instead runs ON
+# build_*.sh here cross-compiles FOR the device (arm-linux-musleabihf, via
+# build/docker-alpine-arm); tc002-discover instead runs ON
 # whatever machine is doing device discovery, so it needs a plain native
 # build for that machine's own architecture, not an ARM cross-compile.
 #
@@ -25,13 +25,13 @@ FROM alpine:3.22.4
 # bash-only syntax (set -o pipefail, local) - Alpine's default shell is
 # BusyBox ash, not bash. file: for verify_artifact()-style checks
 # confirming the result is really a static, stripped ELF binary.
-RUN apk add --no-cache build-base bash file
+RUN apk add --no-cache build-base bash file mbedtls-dev mbedtls-static
 
 WORKDIR /work
 
 # Marks this environment as a build container, so build/common.sh's
-# require_container() accepts it the same way it accepts the Buster
-# image - see that function's own comment in build/common.sh.
+# require_container() accepts it the same way it accepts the other
+# tc002-tools images - see that function's own comment in build/common.sh.
 ENV TC002_TOOLS_CONTAINER=1
 
 ENTRYPOINT ["/bin/bash"]

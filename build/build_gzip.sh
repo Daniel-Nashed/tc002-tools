@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Cross-builds gzip for the TC002 (arm-linux-gnueabihf).
+# Cross-builds gzip for the TC002 (arm-linux-musleabihf), FULLY STATIC, with the
+# musl toolchain in build/docker-alpine-arm.
 #
 # Vendored, not reimplemented: the device's own BusyBox almost certainly
 # has some gzip applet already, but this project has repeatedly found
@@ -74,21 +75,20 @@ configure_and_build()
   local configure_log="${WORK_DIR}/build-gzip-configure.log"
 
   # --disable-year2038: gzip's gnulib-derived configure refuses by
-  # default to silently build with a 32-bit time_t on a target that
-  # could in principle support a 64-bit one - confirmed by a real failed
-  # configure run against this project's own build container (Debian
-  # Buster's libc6-dev-armhf-cross, an older glibc with no 64-bit time_t
-  # support for armhf at all): "this system appears to support
-  # timestamps after mid-January 2038, but no mechanism for enabling
-  # wide time_t was detected... To proceed with 32-bit time_t, configure
-  # with --disable-year2038". This is the standard, intended way to
-  # answer that check for a 32-bit target, not a workaround - the device
-  # itself is 32-bit ARM EABI, so a 64-bit time_t is not on the table
-  # here regardless.
-  log "running: CC=${TARGET_CC} CFLAGS=${TARGET_CFLAGS} ./configure --host=${TARGET_TRIPLE} --disable-year2038"
+  # default to silently build with a 32-bit time_t on a 32-bit target: "this
+  # system appears to support timestamps after mid-January 2038, but no
+  # mechanism for enabling wide time_t was detected... To proceed with
+  # 32-bit time_t, configure with --disable-year2038". This is the standard,
+  # intended way to answer that check for a 32-bit target, not a workaround.
+  # (musl's time_t is already 64-bit on 32-bit ARM, so with this toolchain
+  # the flag only silences the check - gzip's own timestamp field is 32-bit
+  # anyway.)
+  #
+  # LDFLAGS=-static: no shared libraries at all (musl is linked in).
+  log "running: CC=${TARGET_CC} CFLAGS=${TARGET_CFLAGS} LDFLAGS=-static ./configure --host=${TARGET_TRIPLE} --disable-year2038"
 
   ( cd "$SRC_DIR" \
-    && CC="$TARGET_CC" CFLAGS="$TARGET_CFLAGS" \
+    && CC="$TARGET_CC" CFLAGS="$TARGET_CFLAGS" LDFLAGS="-static $TARGET_LDFLAGS_SIZE" \
        ./configure --host="$TARGET_TRIPLE" --disable-year2038 \
        >"$configure_log" 2>&1 \
     && test -f Makefile \
@@ -99,7 +99,7 @@ configure_and_build()
   # directly in the real 1.14 source, so there is no "checking host
   # system type..." banner to look for regardless of whether --host took
   # effect. What --host actually does here (confirmed the same way, by
-  # diffing a native vs. --host=arm-linux-gnueabihf configure run) is
+  # diffing a native vs. a --host=<cross triple> configure run) is
   # make autoconf's standard boilerplate probe for the host-prefixed
   # compiler first - this line is present only in the cross run.
   local expect_line="checking for ${TARGET_CC}... ${TARGET_CC}"
@@ -131,33 +131,15 @@ verify_artifact()
   require_cmd readelf
 
   local binary="${SRC_DIR}/gzip"
-  local needed
 
   file -b "$binary" | grep -qi 'ELF' \
     || die "${binary} is not an ELF binary (got: $(file -b "$binary"))"
 
-  needed="$(readelf -d "$binary" 2>/dev/null | grep NEEDED || true)"
-
-  log "dynamic dependencies of ${binary}:"
-  if [ -n "$needed" ]; then
-    echo "$needed" | while IFS= read -r line
-    do
-      log "  ${line}"
-    done
-  else
-    log "  <none>"
-  fi
-
   # gzip has no zlib/ncurses/openssl dependency at all (its own
   # from-scratch deflate/inflate implementation - confirmed directly in
-  # the real source, see this script's own header comment), so libc and
-  # the dynamic linker are the only expected NEEDED entries. Anything
-  # else here would mean something unexpected got linked in.
-  if echo "$needed" | grep -qivE 'libc\.so|ld-linux'; then
-    die "gzip has an unexpected dynamic dependency beyond libc/ld-linux (see the dependency list logged just above) - gzip should have no zlib/ncurses/openssl dependency at all."
-  fi
-
-  log "verified: only the expected libc/ld-linux dynamic dependencies"
+  # the real source, see this script's own header comment), and the musl
+  # libc is linked in statically: there must be no NEEDED entry at all.
+  verify_static_binary "$binary"
 }
 
 package_artifacts()
@@ -179,7 +161,7 @@ write_manifest()
   local commit
   commit="$(project_git_commit)"
   local cc_version
-  cc_version="$("$TARGET_CC" --version | head -n1)"
+  cc_version="$("$TARGET_CC" --version | sed -n '1p')"
   local size
   size="$(stat -c%s "$path")"
   local sha256
@@ -218,6 +200,7 @@ write_manifest()
 main()
 {
   require_container
+  require_musl_toolchain
 
   header "gzip ${GZIP_VERSION}: checking prerequisites"
   require_cmd sha256sum

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Cross-builds dropbear, scp, dropbearkey, dbclient, and dropbearconvert for the TC002 (arm-linux-gnueabihf).
+# Cross-builds dropbear, scp, dropbearkey, dbclient, and dropbearconvert - as ONE multi-call binary, dropbearmulti - for the TC002 (arm-linux-musleabihf),
+# FULLY STATIC, with the musl toolchain in build/docker-alpine-arm. zlib (SSH compression) is Alpine's static
+# armv7 zlib from that image's sysroot (TC002_MUSL_SYSROOT); the libc is musl, linked in.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +39,20 @@ PATCH_FILE="${REPO_ROOT}/dropbear/patches/0001-tc002-synthetic-passwd.patch"
 # - no separate patch needed for either.
 PROGRAMS="dropbear scp dropbearkey dbclient dropbearconvert"
 WRAP_LDFLAGS="-Wl,--wrap=getpwnam -Wl,--wrap=getpwuid"
+
+# The five programs are built as ONE multi-call binary, dropbearmulti
+# (Dropbear's own MULTI=1 mode, see MULTI.md in its source - no source
+# changes): every program's main() is renamed at compile time, dbmulti.c has
+# the only real main() and picks the program from the name it is started
+# with (a symlink named dropbear/scp/... pointing at dropbearmulti, created
+# by install/install_dropbear.sh and refreshed by runtime/init.sh). The
+# shared code - musl, zlib, libtomcrypt, libtommath - is linked ONCE instead
+# of once per program, which is most of the size of five static binaries.
+MULTI_BINARY="dropbearmulti"
+
+# What each program is called inside the multi binary: the entry point that
+# dbmulti.c calls. All must be present in the final binary.
+MULTI_ENTRY_POINTS="dropbear_main cli_main dropbearkey_main dropbearconvert_main scp_main"
 
 check_pinned_checksum()
 {
@@ -114,10 +130,19 @@ configure_and_build()
 {
   local configure_log="${WORK_DIR}/build-dropbear-configure.log"
 
-  log "running: CC=${TARGET_CC} CFLAGS=${TARGET_CFLAGS} ./configure --host=${TARGET_TRIPLE} --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx"
+  # zlib comes from the ARM sysroot: its header via CFLAGS (a flag that is
+  # baked into the generated Makefile - the exported CPPFLAGS used at make
+  # time below would not carry it), its static library via LDFLAGS, which is
+  # also where -static goes. The same LDFLAGS are repeated on the make
+  # command line further down, since that replaces the Makefile's own.
+  local sysroot="$TC002_MUSL_SYSROOT"
+  local build_cflags="${TARGET_CFLAGS} -I${sysroot}/usr/include"
+  local build_ldflags="-static ${TARGET_LDFLAGS_SIZE} -L${sysroot}/usr/lib"
+
+  log "running: CC=${TARGET_CC} CFLAGS=${build_cflags} LDFLAGS=${build_ldflags} ./configure --host=${TARGET_TRIPLE} --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx"
 
   ( cd "$SRC_DIR" \
-    && CC="$TARGET_CC" CFLAGS="$TARGET_CFLAGS" \
+    && CC="$TARGET_CC" CFLAGS="$build_cflags" LDFLAGS="$build_ldflags" \
        ./configure \
          --host="$TARGET_TRIPLE" \
          --disable-lastlog \
@@ -135,6 +160,14 @@ configure_and_build()
     || die "configure's own host-type detection in ${configure_log} does not mention arm - --host=${TARGET_TRIPLE} may not have taken effect"
 
   log "verified: configure selected an arm host target"
+
+  # zlib (SSH compression) must really have been found in the sysroot: the
+  # release configure quietly turns it off when it cannot link -lz, and the
+  # binaries would then build without compression instead of failing.
+  grep -q -- 'Enabling zlib' "$configure_log" \
+    || die "configure did not enable zlib (see ${configure_log}) - the static libz.a in ${sysroot}/usr/lib was not found or not usable"
+
+  log "verified: zlib enabled (static, from ${sysroot})"
 
   # Validate the --disable-* flags actually took effect. Each one maps to
   # a DISABLE_* macro in the generated config.h (confirmed directly
@@ -183,8 +216,8 @@ configure_and_build()
 
   ( cd "$SRC_DIR" \
     && make V=1 \
-       PROGRAMS="$PROGRAMS" \
-       LDFLAGS="$WRAP_LDFLAGS" 2>&1 | tee "$make_log"; exit "${PIPESTATUS[0]}" ) \
+       PROGRAMS="$PROGRAMS" MULTI=1 \
+       LDFLAGS="${build_ldflags} ${WRAP_LDFLAGS}" 2>&1 | tee "$make_log"; exit "${PIPESTATUS[0]}" ) \
     || make_exit=$?
 
   unset CPPFLAGS
@@ -208,7 +241,7 @@ configure_and_build()
   # between versions (older releases end the command in "-o dbutil.o",
   # 2026.94 ends it in "-o obj/dbutil.o -c").
   local dbutil_line
-  dbutil_line="$(grep -- 'dbutil\.c' "$make_log" | head -n1)"
+  dbutil_line="$(grep -- 'dbutil\.c' "$make_log" | sed -n '1p')"
 
   if [ -z "$dbutil_line" ]; then
     die "could not find dbutil.c's compile command in ${make_log} - inspect that file directly"
@@ -230,7 +263,9 @@ validate_unstripped()
   require_cmd strings
   require_cmd nm
 
-  local binary="${SRC_DIR}/dropbear"
+  local binary="${SRC_DIR}/${MULTI_BINARY}"
+
+  test -f "$binary" || die "make succeeded but ${binary} does not exist - MULTI=1 should have produced it, see ${WORK_DIR}/build-dropbear-make.log"
 
   log "validating binary: ${binary}"
   log "checking for: DEFAULT_ROOT_PATH's expanded value '/data/bin:/usr/sbin:/usr/bin:/sbin:/bin' (via strings), and the __wrap_getpwnam / __wrap_getpwuid symbols (via nm)"
@@ -281,22 +316,22 @@ validate_unstripped()
 
   log "verified DEFAULT_ROOT_PATH and --wrap symbols in unstripped binary: ${binary}"
 
-  # dbclient and dropbearconvert both share dbutil.o (hence the --wrap
-  # symbols, confirmed in Makefile.in) but are not servers - neither has a
-  # DEFAULT_ROOT_PATH of its own to check.
-  local other_name other_binary
+  # All five programs must really be inside the one binary: dbmulti.c calls
+  # each program's renamed main(), so each entry point must be a symbol here
+  # (in the unstripped file). A program missing from PROGRAMS, or not linked,
+  # would otherwise only show up on the device as "Make a symlink ..." usage.
+  # The symbol list is captured first and searched as a variable: piping
+  # nm straight into "grep -q" is a false-negative trap under
+  # "set -o pipefail" (grep exits at the first match, nm dies of SIGPIPE,
+  # and the whole pipeline is then reported as failed).
+  local symbols entry
+  symbols="$(nm "$binary")"
 
-  for other_name in dbclient dropbearconvert
+  for entry in $MULTI_ENTRY_POINTS main
   do
-    other_binary="${SRC_DIR}/${other_name}"
-
-    wrapnam_match="$(nm "$other_binary" | grep -E '__wrap_getpwnam' || true)"
-    wrapuid_match="$(nm "$other_binary" | grep -E '__wrap_getpwuid' || true)"
-
-    [ -n "$wrapnam_match" ] && [ -n "$wrapuid_match" ] \
-      || die "${other_name} (${other_binary}) is missing the __wrap_getpwnam/__wrap_getpwuid symbols - it should share dbutil.o with dropbear, but does not appear to"
-
-    log "verified --wrap symbols in ${other_name}: ${other_binary}"
+    grep -qE " [Tt] ${entry}\$" <<<"$symbols" \
+      || die "${binary} has no ${entry} symbol - that program is not part of the multi-call binary"
+    log "verified entry point ${entry}"
   done
 }
 
@@ -304,29 +339,48 @@ package_artifacts()
 {
   mkdir -p "$DIST_DIR"
 
-  cp "${SRC_DIR}/dropbear" "${DIST_DIR}/dropbear.unstripped"
-
-  local name
-  for name in dropbear scp dropbearkey dbclient dropbearconvert
+  # Earlier builds made five separate binaries. They must not be left in
+  # dist/ next to the multi-call binary: the install and verify scripts
+  # would not know which to trust, and a stale dropbear would look built.
+  local old
+  for old in dropbear scp dropbearkey dbclient dropbearconvert
   do
-    cp "${SRC_DIR}/${name}" "${DIST_DIR}/${name}"
-    "${TARGET_STRIP}" "${DIST_DIR}/${name}"
-    log_deliverable "${DIST_DIR}/${name}"
-    log_success "$name" "$DROPBEAR_VERSION"
+    if [ -e "${DIST_DIR}/${old}" ]; then
+      rm -f "${DIST_DIR}/${old}"
+      log "removed stale separate binary ${DIST_DIR}/${old} (replaced by ${MULTI_BINARY})"
+    fi
   done
+  rm -f "${DIST_DIR}/dropbear.unstripped"
 
-  log "stripped artifacts copied to ${DIST_DIR}"
+  cp "${SRC_DIR}/${MULTI_BINARY}" "${DIST_DIR}/${MULTI_BINARY}.unstripped"
+  cp "${SRC_DIR}/${MULTI_BINARY}" "${DIST_DIR}/${MULTI_BINARY}"
+  "${TARGET_STRIP}" "${DIST_DIR}/${MULTI_BINARY}"
+  log_deliverable "${DIST_DIR}/${MULTI_BINARY}"
+  log_success "$MULTI_BINARY" "$DROPBEAR_VERSION"
+
+  log "stripped artifact copied to ${DIST_DIR}"
 }
 
 write_manifest()
 {
   local manifest="${DIST_DIR}/manifest-dropbear.json"
+  local path="${DIST_DIR}/${MULTI_BINARY}"
   local built_at
   built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local commit
   commit="$(project_git_commit)"
   local cc_version
-  cc_version="$("$TARGET_CC" --version | head -n1)"
+  cc_version="$("$TARGET_CC" --version | sed -n '1p')"
+  local size
+  size="$(stat -c%s "$path")"
+  local sha256
+  sha256="$(sha256sum "$path" | cut -d' ' -f1)"
+  local file_info
+  file_info="$(file -b "$path")"
+  local needed
+  # "|| true": a static binary has no NEEDED lines, and a grep that finds
+  # nothing would abort this script under "set -o pipefail".
+  needed="$(readelf -d "$path" 2>/dev/null | grep NEEDED | tr -d '\n' | sed 's/"/\\"/g' || true)"
 
   {
     echo "{"
@@ -334,37 +388,12 @@ write_manifest()
     echo "  \"built_at_utc\": \"${built_at}\","
     echo "  \"git_commit\": \"${commit}\","
     echo "  \"compiler\": \"${cc_version}\","
-    echo "  \"artifacts\": ["
-
-    local first=1
-    local name
-    for name in dropbear scp dropbearkey dbclient dropbearconvert
-    do
-      local path="${DIST_DIR}/${name}"
-      local size
-      size="$(stat -c%s "$path")"
-      local sha256
-      sha256="$(sha256sum "$path" | cut -d' ' -f1)"
-      local file_info
-      file_info="$(file -b "$path")"
-      local needed
-      needed="$(readelf -d "$path" 2>/dev/null | grep NEEDED | tr -d '\n' | sed 's/"/\\"/g')"
-
-      if [ "$first" -eq 0 ]; then
-        echo "    ,"
-      fi
-      first=0
-
-      echo "    {"
-      echo "      \"name\": \"${name}\","
-      echo "      \"size_bytes\": ${size},"
-      echo "      \"sha256\": \"${sha256}\","
-      echo "      \"file\": \"${file_info}\","
-      echo "      \"needed\": \"${needed}\""
-      echo "    }"
-    done
-
-    echo "  ]"
+    echo "  \"name\": \"${MULTI_BINARY}\","
+    echo "  \"programs\": \"${PROGRAMS}\","
+    echo "  \"size_bytes\": ${size},"
+    echo "  \"sha256\": \"${sha256}\","
+    echo "  \"file\": \"${file_info}\","
+    echo "  \"needed\": \"${needed}\""
     echo "}"
   } >"$manifest"
 
@@ -375,8 +404,14 @@ write_manifest()
 main()
 {
   require_container
+  require_musl_toolchain
+
+  if [ -z "${TC002_MUSL_SYSROOT:-}" ] || [ ! -f "${TC002_MUSL_SYSROOT}/usr/lib/libz.a" ]; then
+    die "static zlib not found in TC002_MUSL_SYSROOT (${TC002_MUSL_SYSROOT:-unset}) - it is installed by build/docker-alpine-arm/Dockerfile; rebuild that image"
+  fi
 
   header "dropbear ${DROPBEAR_VERSION}: checking prerequisites"
+  require_cmd readelf
   require_cmd sha256sum
   require_cmd tar
   require_cmd patch
@@ -399,11 +434,14 @@ main()
   header "dropbear ${DROPBEAR_VERSION}: validating unstripped binary"
   validate_unstripped
 
+  header "dropbear ${DROPBEAR_VERSION}: verifying it is really static"
+  verify_static_binary "${SRC_DIR}/${MULTI_BINARY}"
+
   header "dropbear ${DROPBEAR_VERSION}: stripping and packaging artifacts"
   package_artifacts
   write_manifest
 
-  log "dropbear build complete: ${DIST_DIR}"
+  log "dropbear build complete: ${DIST_DIR}/${MULTI_BINARY} (symlinks named ${PROGRAMS} are created on the device by install/install_dropbear.sh)"
 }
 
 main

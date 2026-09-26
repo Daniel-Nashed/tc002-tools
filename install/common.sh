@@ -144,16 +144,16 @@ require_device()
 # gzip                                                  persistent (the on-demand tier's own
 #                                                        decompressor - must not itself be
 #                                                        on-demand, or nothing could unpack it)
-# ncdu (+ncdu.bin, wrapper, terminfo)                   persistent - only 204 KB, smaller than
-#                                                        curl/nginx by 5-16x, so not worth the
+# ncdu (+ncdu.bin, wrapper, terminfo)                   persistent - about 300 KB static, far
+#                                                        smaller than curl/nginx, so not worth the
 #                                                        on-demand tier's own overhead; see
 #                                                        install_etc.sh's TERMINFO wrapper
 # curl / nginx / openssl / 7zz                          compressed-on-demand (genuinely larger,
-#                                                        occasional use - 7zz's dynamic build is
-#                                                        ~1.6-2.1MB, closer to curl's 952KB than
-#                                                        any persistent tool here, so it joins
-#                                                        this tier rather than install_tools.sh's
-#                                                        SIMPLE_TOOLS)
+#                                                        occasional use - static musl sizes:
+#                                                        curl 1.1 MB, 7zz 1.7 MB, openssl 3.2 MB,
+#                                                        nginx 3.1 MB - far above any persistent
+#                                                        tool here, so they join this tier rather
+#                                                        than install_tools.sh's SIMPLE_TOOLS)
 #
 # tc002-discover is deliberately absent - not managed by this table at
 # all; it never touches the device (see its own README). No tool is
@@ -162,7 +162,7 @@ require_device()
 deployment_mode_for()
 {
   case "$1" in
-    dropbear|scp|dropbearkey|dbclient|dropbearconvert|init.sh|sshd.sh|setup_etc.sh)
+    dropbearmulti|dropbear|scp|dropbearkey|dbclient|dropbearconvert|init.sh|sshd.sh|setup_etc.sh)
       echo "persistent"
       ;;
     nshbox|kilo|gzip|ncdu)
@@ -220,7 +220,17 @@ run_post_install_hook()
 # second table format.
 on_demand_tools()
 {
-  echo "curl nginx openssl 7zz"
+  # The OpenSSL CLI (3.2 MB, the biggest of them) is NOT part of the default
+  # pack: it is a debugging tool, so it is pushed to /tmp only when needed
+  # (adb push dist/openssl/device/data/bin/openssl /tmp/ - no flash used).
+  # TC002_INSTALL_OPENSSL_CLI=1 (or install_on_demand.sh / verify_installation.sh
+  # --with-openssl) puts it back in the pack. install and verify must agree, so
+  # both read this one function.
+  if [ "${TC002_INSTALL_OPENSSL_CLI:-0}" = "1" ]; then
+    echo "curl nginx openssl 7zz"
+  else
+    echo "curl nginx 7zz"
+  fi
 }
 
 # Where each on-demand tool's built artifact actually lives under dist/ -

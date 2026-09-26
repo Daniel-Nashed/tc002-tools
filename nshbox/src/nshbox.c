@@ -3,11 +3,15 @@
  *
  * Initially written for the Ulanzi TC002 / FlyThings Linux.
  *
- * Dynamically linked against libcrypto (OpenSSL's EVP interface) for the
- * checksum commands (sha256sum, sha1sum, sha384sum, sha512sum, md5sum) - the device
- * needs libcrypto.so.1.1 present at runtime as a result. Every other
- * command here is libc-only; this was a deliberate, separately-reviewed
- * tradeoff, not something to grow casually - see nshbox/README.md.
+ * The checksum commands (sha256sum, sha1sum, sha384sum, sha512sum, md5sum)
+ * use mbedTLS's low-level digest functions (libmbedcrypto), linked
+ * statically - the binary has no runtime dependency on any crypto library
+ * (it used to need the device's libcrypto.so.1.1). Every other command is
+ * libc-only - see nshbox/README.md.
+ *
+ * -DNSHBOX_NO_CHECKSUMS leaves the five checksum commands out entirely, so
+ * mbedTLS is not needed to build either - see "make CHECKSUMS=0" in
+ * nshbox/src/makefile.
  *
  * Deliberately no SHA3 commands: confirmed on-device that the TC002's real
  * libcrypto.so.1.1 predates OpenSSL 1.1.1 (EVP_sha3_*() needs 1.1.1+), and
@@ -15,8 +19,8 @@
  * start - see nshbox/README.md. Stick to OpenSSL 1.1.0-or-earlier API.
  *
  * Build:
- *   arm-linux-gnueabihf-gcc -Os -Wall -Wextra -o nshbox nshbox.c -lcrypto
- *   arm-linux-gnueabihf-strip nshbox
+ *   make -C nshbox/src CROSS=arm-linux-gnueabihf- MBEDTLS_DIR=<mbedtls prefix>
+ *   arm-linux-gnueabihf-strip nshbox/src/nshbox
  *
  * Usage:
  *   nshbox --version | -v
@@ -35,8 +39,8 @@
  *   nshbox hexdump [file]
  *   nshbox file [-bL] file ...
  *   nshbox stat [--json] <file> [...]
- *   nshbox head [-n lines] [file ...]
- *   nshbox tail [-n lines] [file ...]
+ *   nshbox head [-n N | -N | -c N] [-q | -v] [file ...]
+ *   nshbox tail [-n [+]N | -N | -c [+]N] [-q | -v] [file ...]
  *   nshbox wc [-lwc] [file ...]
  *   nshbox sort [-rnu] [file ...]
  *   nshbox tee [-a] [file ...]
@@ -90,7 +94,13 @@
 #include <netinet/in.h>
 #include <fnmatch.h>
 #include <fcntl.h>
-#include <openssl/evp.h>
+#ifndef NSHBOX_NO_CHECKSUMS
+#include <mbedtls/version.h>
+#include <mbedtls/md5.h>
+#include <mbedtls/sha1.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/sha512.h>
+#endif
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
 #include <resolv.h>
@@ -98,6 +108,14 @@
 
 
 #define NSHBOX_VERSION    "0.6"
+
+/* Shown after the version, so a "command not found" for sha256sum etc. is
+ * explained by the banner instead of looking like a bug. */
+#ifdef NSHBOX_NO_CHECKSUMS
+#define NSHBOX_VARIANT    " (no checksum commands)"
+#else
+#define NSHBOX_VARIANT    ""
+#endif
 
 
 typedef int (*command_func_t)(int argc, char **argv);
@@ -3825,23 +3843,103 @@ static int cmd_stat(int argc, char **argv)
 /* head / tail                                                      */
 /* ------------------------------------------------------------------ */
 
-static int parse_line_count(int argc, char **argv, long default_n, long *count, int *first_file)
+/* Options shared by head and tail, GNU spellings: -n N / -nN / --lines=N /
+ * -N (lines), -c N / -cN / --bytes=N (bytes), -q/--quiet/--silent and
+ * -v/--verbose (file headers off/on). tail alone also takes +N after -n/-c
+ * (start at line/byte N instead of counting from the end). Not supported:
+ * size suffixes (k, M ...), head's "-n -N" (all but the last N), tail -f. */
+typedef struct {
+    int  bytes;         /* -c: count is bytes, not lines */
+    int  from_start;    /* tail -n +N / -c +N */
+    int  quiet;
+    int  verbose;
+    long count;
+    int  first_file;    /* index of the first file argument in argv */
+} headtail_opts_t;
+
+static int headtail_number(const char *s, int is_tail, headtail_opts_t *o)
 {
-    *count = default_n;
-    *first_file = 1;
+    char *end;
+    long n;
 
-    if (argc >= 3 && strcmp(argv[1], "-n") == 0) {
-        char *end;
-        long n;
-
-        errno = 0;
-        n = strtol(argv[2], &end, 10);
-        if (errno || *end || n < 0)
-            return -1;
-        *count = n;
-        *first_file = 3;
+    if (is_tail && s[0] == '+') {
+        o->from_start = 1;
+        s++;
+    } else if (is_tail && s[0] == '-') {
+        s++;    /* tail -n -3 means the same as tail -n 3 */
     }
 
+    if (!isdigit((unsigned char)s[0]))
+        return -1;
+
+    errno = 0;
+    n = strtol(s, &end, 10);
+
+    if (errno || *end || n < 0)
+        return -1;
+
+    o->count = n;
+    return 0;
+}
+
+static int parse_headtail(int argc, char **argv, int is_tail, headtail_opts_t *o)
+{
+    int i;
+
+    memset(o, 0, sizeof(*o));
+    o->count = 10;
+
+    for (i = 1; i < argc; i++) {
+        const char *a = argv[i];
+
+        if (strcmp(a, "--") == 0) {
+            i++;
+            break;
+        }
+
+        /* First file, or "-" meaning stdin. */
+        if (a[0] != '-' || a[1] == '\0')
+            break;
+
+        if (!strcmp(a, "-q") || !strcmp(a, "--quiet") || !strcmp(a, "--silent")) {
+            o->quiet = 1;
+            o->verbose = 0;
+        } else if (!strcmp(a, "-v") || !strcmp(a, "--verbose")) {
+            o->verbose = 1;
+            o->quiet = 0;
+        } else if (!strncmp(a, "--lines=", 8)) {
+            o->bytes = 0;
+            if (headtail_number(a + 8, is_tail, o) != 0)
+                return -1;
+        } else if (!strncmp(a, "--bytes=", 8)) {
+            o->bytes = 1;
+            if (headtail_number(a + 8, is_tail, o) != 0)
+                return -1;
+        } else if (a[1] == 'n' || a[1] == 'c') {
+            const char *val;
+
+            o->bytes = (a[1] == 'c');
+
+            if (a[2] != '\0')
+                val = a + 2;
+            else if (i + 1 < argc)
+                val = argv[++i];
+            else
+                return -1;
+
+            if (headtail_number(val, is_tail, o) != 0)
+                return -1;
+        } else if (isdigit((unsigned char)a[1])) {
+            /* -20, the old shorthand for -n 20 */
+            o->bytes = 0;
+            if (headtail_number(a + 1, 0, o) != 0)
+                return -1;
+        } else {
+            return -1;
+        }
+    }
+
+    o->first_file = i;
     return 0;
 }
 
@@ -3860,33 +3958,128 @@ static int head_stream(FILE *f, long count)
     return ferror(f) ? 1 : 0;
 }
 
-static int cmd_head(int argc, char **argv)
+static int head_bytes(FILE *f, long count)
 {
-    long count;
-    int first;
-    int rc = 0;
-    int i;
+    char buf[4096];
 
-    if (parse_line_count(argc, argv, 10, &count, &first) != 0) {
-        fprintf(stderr, "Usage: nshbox head [-n lines] [file ...]\n");
+    while (count > 0) {
+        size_t want = ((size_t)count < sizeof(buf)) ? (size_t)count : sizeof(buf);
+        size_t n = fread(buf, 1, want, f);
+
+        if (n == 0)
+            break;
+
+        fwrite(buf, 1, n, stdout);
+        count -= (long)n;
+    }
+
+    return ferror(f) ? 1 : 0;
+}
+
+/* Copies the rest of f to stdout. */
+static int copy_rest(FILE *f)
+{
+    char buf[4096];
+    size_t n;
+
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        fwrite(buf, 1, n, stdout);
+
+    return ferror(f) ? 1 : 0;
+}
+
+/* tail -n +N: everything from line N (1-based) on. */
+static int tail_lines_from(FILE *f, long start)
+{
+    char *line = NULL;
+    size_t cap = 0;
+    long skip = (start > 0) ? start - 1 : 0;
+
+    while (skip > 0 && getline(&line, &cap, f) >= 0)
+        skip--;
+
+    free(line);
+
+    if (ferror(f))
+        return 1;
+
+    return copy_rest(f);
+}
+
+/* tail -c +N: everything from byte N (1-based) on. */
+static int tail_bytes_from(FILE *f, long start)
+{
+    char buf[4096];
+    long skip = (start > 0) ? start - 1 : 0;
+
+    while (skip > 0) {
+        size_t want = ((size_t)skip < sizeof(buf)) ? (size_t)skip : sizeof(buf);
+        size_t n = fread(buf, 1, want, f);
+
+        if (n == 0)
+            break;
+
+        skip -= (long)n;
+    }
+
+    if (ferror(f))
+        return 1;
+
+    return copy_rest(f);
+}
+
+#define TAIL_BYTES_MAX (16L * 1024 * 1024)
+
+/* tail -c N: the last N bytes, kept in a ring buffer so it works on a pipe
+ * too. N is capped so a typo cannot ask for gigabytes of memory. */
+static int tail_bytes(FILE *f, long count)
+{
+    unsigned char *ring;
+    unsigned char chunk[4096];
+    long used = 0;
+    long pos = 0;
+    size_t n;
+    size_t k;
+
+    if (count == 0)
+        return 0;
+
+    if (count > TAIL_BYTES_MAX) {
+        fprintf(stderr, "tail: -c %ld is too large (limit %ld)\n", count, TAIL_BYTES_MAX);
         return 1;
     }
 
-    if (first == argc)
-        return head_stream(stdin, count);
+    ring = malloc((size_t)count);
 
-    for (i = first; i < argc; i++) {
-        FILE *f = fopen(argv[i], "r");
-        if (!f) {
-            perror(argv[i]);
-            rc = 1;
-            continue;
-        }
-        if (head_stream(f, count) != 0)
-            rc = 1;
-        fclose(f);
+    if (!ring) {
+        perror("malloc");
+        return 1;
     }
-    return rc;
+
+    while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+        for (k = 0; k < n; k++) {
+            ring[pos] = chunk[k];
+            pos = (pos + 1) % count;
+
+            if (used < count)
+                used++;
+        }
+    }
+
+    if (ferror(f)) {
+        free(ring);
+        return 1;
+    }
+
+    if (used == count) {
+        fwrite(ring + pos, 1, (size_t)(count - pos), stdout);
+        fwrite(ring, 1, (size_t)pos, stdout);
+    } else {
+        fwrite(ring, 1, (size_t)used, stdout);
+    }
+
+    free(ring);
+    return 0;
 }
 
 static int tail_stream(FILE *f, long count)
@@ -3931,33 +4124,78 @@ static int tail_stream(FILE *f, long count)
     return rc;
 }
 
-static int cmd_tail(int argc, char **argv)
+static int headtail_stream(FILE *f, const headtail_opts_t *o, int is_tail)
 {
-    long count;
-    int first;
+    if (!is_tail)
+        return o->bytes ? head_bytes(f, o->count) : head_stream(f, o->count);
+
+    if (o->from_start)
+        return o->bytes ? tail_bytes_from(f, o->count) : tail_lines_from(f, o->count);
+
+    return o->bytes ? tail_bytes(f, o->count) : tail_stream(f, o->count);
+}
+
+/* Shared driver. With more than one file (or -v), each file is preceded by
+ * a "==> name <==" line and files are separated by a blank line, like GNU;
+ * -q suppresses that. "-" and no file at all mean stdin. */
+static int headtail_run(int argc, char **argv, int is_tail)
+{
+    headtail_opts_t o;
+    int nfiles;
+    int headers_printed = 0;
     int rc = 0;
     int i;
 
-    if (parse_line_count(argc, argv, 10, &count, &first) != 0) {
-        fprintf(stderr, "Usage: nshbox tail [-n lines] [file ...]\n");
+    if (parse_headtail(argc, argv, is_tail, &o) != 0) {
+        if (is_tail)
+            fprintf(stderr, "Usage: nshbox tail [-n [+]N | -N | -c [+]N] [-q | -v] [file ...]\n");
+        else
+            fprintf(stderr, "Usage: nshbox head [-n N | -N | -c N] [-q | -v] [file ...]\n");
         return 1;
     }
 
-    if (first == argc)
-        return tail_stream(stdin, count);
+    nfiles = argc - o.first_file;
 
-    for (i = first; i < argc; i++) {
-        FILE *f = fopen(argv[i], "r");
+    if (nfiles == 0) {
+        if (o.verbose)
+            printf("==> standard input <==\n");
+
+        return headtail_stream(stdin, &o, is_tail);
+    }
+
+    for (i = o.first_file; i < argc; i++) {
+        int is_stdin = (strcmp(argv[i], "-") == 0);
+        FILE *f = is_stdin ? stdin : fopen(argv[i], "r");
+
         if (!f) {
             perror(argv[i]);
             rc = 1;
             continue;
         }
-        if (tail_stream(f, count) != 0)
+
+        if (o.verbose || (nfiles > 1 && !o.quiet)) {
+            printf("%s==> %s <==\n", headers_printed ? "\n" : "", is_stdin ? "standard input" : argv[i]);
+            headers_printed = 1;
+        }
+
+        if (headtail_stream(f, &o, is_tail) != 0)
             rc = 1;
-        fclose(f);
+
+        if (!is_stdin)
+            fclose(f);
     }
+
     return rc;
+}
+
+static int cmd_head(int argc, char **argv)
+{
+    return headtail_run(argc, argv, 0);
+}
+
+static int cmd_tail(int argc, char **argv)
+{
+    return headtail_run(argc, argv, 1);
 }
 
 
@@ -4570,7 +4808,7 @@ static int cmd_hostname(int argc, char **argv)
 /* ------------------------------------------------------------------ */
 /* DNS lookup (dig, nslookup) - shared backend                        */
 /*                                                                     */
-/* Queries go through glibc's own stub resolver (res_query()), not a  */
+/* Queries go through the libc's own stub resolver (res_query()), not a */
 /* hand-rolled DNS client: it is already part of the C runtime this   */
 /* project links against unconditionally on the device (unlike        */
 /* libcrypto, an optional add-on package - see this file's own top    */
@@ -6624,9 +6862,128 @@ static int cmd_tar(int argc, char **argv)
 }
 
 
+#ifndef NSHBOX_NO_CHECKSUMS
+
 /* ------------------------------------------------------------------ */
 /* sha256sum / sha1sum / sha512sum / md5sum                           */
 /* ------------------------------------------------------------------ */
+
+/* Thin wrapper over mbedTLS's low-level digest calls, one context type for
+ * all five algorithms. The low-level API (not the generic mbedtls_md
+ * interface) is deliberate: md.h would register every enabled digest and
+ * link far more of the library than these five need. mbedTLS 2.x spells
+ * the same calls with a _ret suffix; the macros below map them so a
+ * 2.x libmbedtls-dev (older distributions) works too. */
+#if MBEDTLS_VERSION_NUMBER < 0x03000000
+#define mbedtls_md5_starts      mbedtls_md5_starts_ret
+#define mbedtls_md5_update      mbedtls_md5_update_ret
+#define mbedtls_md5_finish      mbedtls_md5_finish_ret
+#define mbedtls_sha1_starts     mbedtls_sha1_starts_ret
+#define mbedtls_sha1_update     mbedtls_sha1_update_ret
+#define mbedtls_sha1_finish     mbedtls_sha1_finish_ret
+#define mbedtls_sha256_starts   mbedtls_sha256_starts_ret
+#define mbedtls_sha256_update   mbedtls_sha256_update_ret
+#define mbedtls_sha256_finish   mbedtls_sha256_finish_ret
+#define mbedtls_sha512_starts   mbedtls_sha512_starts_ret
+#define mbedtls_sha512_update   mbedtls_sha512_update_ret
+#define mbedtls_sha512_finish   mbedtls_sha512_finish_ret
+#endif
+
+typedef enum {
+    HASH_MD5,
+    HASH_SHA1,
+    HASH_SHA256,
+    HASH_SHA384,
+    HASH_SHA512
+} hash_algo_t;
+
+#define HASH_MAX_DIGEST 64      /* SHA-512; mbedtls_sha512_finish() writes 64 bytes */
+
+typedef struct {
+    hash_algo_t algo;
+    union {
+        mbedtls_md5_context    md5;
+        mbedtls_sha1_context   sha1;
+        mbedtls_sha256_context sha256;
+        mbedtls_sha512_context sha512;   /* SHA-384 and SHA-512 */
+    } u;
+} hash_ctx_t;
+
+static unsigned int hash_digest_len(hash_algo_t algo)
+{
+    switch (algo) {
+    case HASH_MD5:    return 16;
+    case HASH_SHA1:   return 20;
+    case HASH_SHA256: return 32;
+    case HASH_SHA384: return 48;
+    case HASH_SHA512: return 64;
+    }
+
+    return 0;
+}
+
+static int hash_start(hash_ctx_t *c, hash_algo_t algo)
+{
+    c->algo = algo;
+
+    switch (algo) {
+    case HASH_MD5:
+        mbedtls_md5_init(&c->u.md5);
+        return mbedtls_md5_starts(&c->u.md5);
+    case HASH_SHA1:
+        mbedtls_sha1_init(&c->u.sha1);
+        return mbedtls_sha1_starts(&c->u.sha1);
+    case HASH_SHA256:
+        mbedtls_sha256_init(&c->u.sha256);
+        return mbedtls_sha256_starts(&c->u.sha256, 0);
+    case HASH_SHA384:
+        mbedtls_sha512_init(&c->u.sha512);
+        return mbedtls_sha512_starts(&c->u.sha512, 1);
+    case HASH_SHA512:
+        mbedtls_sha512_init(&c->u.sha512);
+        return mbedtls_sha512_starts(&c->u.sha512, 0);
+    }
+
+    return -1;
+}
+
+static int hash_update(hash_ctx_t *c, const unsigned char *buf, size_t n)
+{
+    switch (c->algo) {
+    case HASH_MD5:    return mbedtls_md5_update(&c->u.md5, buf, n);
+    case HASH_SHA1:   return mbedtls_sha1_update(&c->u.sha1, buf, n);
+    case HASH_SHA256: return mbedtls_sha256_update(&c->u.sha256, buf, n);
+    case HASH_SHA384:
+    case HASH_SHA512: return mbedtls_sha512_update(&c->u.sha512, buf, n);
+    }
+
+    return -1;
+}
+
+/* out must hold HASH_MAX_DIGEST bytes. */
+static int hash_finish(hash_ctx_t *c, unsigned char *out)
+{
+    switch (c->algo) {
+    case HASH_MD5:    return mbedtls_md5_finish(&c->u.md5, out);
+    case HASH_SHA1:   return mbedtls_sha1_finish(&c->u.sha1, out);
+    case HASH_SHA256: return mbedtls_sha256_finish(&c->u.sha256, out);
+    case HASH_SHA384:
+    case HASH_SHA512: return mbedtls_sha512_finish(&c->u.sha512, out);
+    }
+
+    return -1;
+}
+
+static void hash_free(hash_ctx_t *c)
+{
+    switch (c->algo) {
+    case HASH_MD5:    mbedtls_md5_free(&c->u.md5); break;
+    case HASH_SHA1:   mbedtls_sha1_free(&c->u.sha1); break;
+    case HASH_SHA256: mbedtls_sha256_free(&c->u.sha256); break;
+    case HASH_SHA384:
+    case HASH_SHA512: mbedtls_sha512_free(&c->u.sha512); break;
+    }
+}
 
 /* --json: one array of {"file","algorithm","digest"} objects, one per
  * file actually hashed. *count is how many entries have been emitted so
@@ -6634,50 +6991,43 @@ static int cmd_tar(int argc, char **argv)
  * that cannot be read gets its usual message on stderr and a non-zero
  * exit, and no entry - same as text mode, which prints nothing on stdout
  * for it either, so "digest" is always a real digest, never a placeholder. */
-static int hash_stream(FILE *f, const char *display_name, const EVP_MD *md,
+static int hash_stream(FILE *f, const char *display_name, hash_algo_t algo_id,
                        const char *algo, int json, int *count)
 {
-    EVP_MD_CTX *ctx;
+    hash_ctx_t ctx;
     unsigned char buf[65536];
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digest_len;
+    unsigned char digest[HASH_MAX_DIGEST];
+    unsigned int digest_len = hash_digest_len(algo_id);
     size_t n;
     unsigned int i;
 
-    ctx = EVP_MD_CTX_new();
-
-    if (ctx == NULL) {
-        fprintf(stderr, "nshbox: out of memory\n");
-        return 1;
-    }
-
-    if (EVP_DigestInit_ex(ctx, md, NULL) != 1) {
-        fprintf(stderr, "nshbox: EVP_DigestInit_ex failed\n");
-        EVP_MD_CTX_free(ctx);
+    if (hash_start(&ctx, algo_id) != 0) {
+        fprintf(stderr, "nshbox: %s: hash init failed\n", algo);
+        hash_free(&ctx);
         return 1;
     }
 
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        if (EVP_DigestUpdate(ctx, buf, n) != 1) {
-            fprintf(stderr, "nshbox: EVP_DigestUpdate failed\n");
-            EVP_MD_CTX_free(ctx);
+        if (hash_update(&ctx, buf, n) != 0) {
+            fprintf(stderr, "nshbox: %s: hash update failed\n", algo);
+            hash_free(&ctx);
             return 1;
         }
     }
 
     if (ferror(f)) {
         perror(display_name);
-        EVP_MD_CTX_free(ctx);
+        hash_free(&ctx);
         return 1;
     }
 
-    if (EVP_DigestFinal_ex(ctx, digest, &digest_len) != 1) {
-        fprintf(stderr, "nshbox: EVP_DigestFinal_ex failed\n");
-        EVP_MD_CTX_free(ctx);
+    if (hash_finish(&ctx, digest) != 0) {
+        fprintf(stderr, "nshbox: %s: hash finish failed\n", algo);
+        hash_free(&ctx);
         return 1;
     }
 
-    EVP_MD_CTX_free(ctx);
+    hash_free(&ctx);
 
     if (json) {
         if (*count > 0)
@@ -6702,7 +7052,7 @@ static int hash_stream(FILE *f, const char *display_name, const EVP_MD *md,
     return 0;
 }
 
-static int hash_main(int argc, char **argv, const EVP_MD *md, const char *algo)
+static int hash_main(int argc, char **argv, hash_algo_t md, const char *algo)
 {
     int rc = 0;
     int json = 0;
@@ -6758,37 +7108,34 @@ static int hash_main(int argc, char **argv, const EVP_MD *md, const char *algo)
 
 static int cmd_sha256sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_sha256(), "sha256");
+    return hash_main(argc, argv, HASH_SHA256, "sha256");
 }
 
 static int cmd_sha1sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_sha1(), "sha1");
+    return hash_main(argc, argv, HASH_SHA1, "sha1");
 }
 
 static int cmd_sha384sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_sha384(), "sha384");
+    return hash_main(argc, argv, HASH_SHA384, "sha384");
 }
 
 static int cmd_sha512sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_sha512(), "sha512");
+    return hash_main(argc, argv, HASH_SHA512, "sha512");
 }
 
 static int cmd_md5sum(int argc, char **argv)
 {
-    return hash_main(argc, argv, EVP_md5(), "md5");
+    return hash_main(argc, argv, HASH_MD5, "md5");
 }
 
 /*
- * No SHA3 commands here - EVP_sha3_*() needs OpenSSL >= 1.1.1, and the
- * TC002's real /lib/libcrypto.so.1.1 is older than that (confirmed
- * on-device: linking SHA3 in made the whole nshbox binary refuse to
- * start with "version `OPENSSL_1_1_1' not found", not just the SHA3
- * commands - see nshbox/README.md). Every command above uses OpenSSL
- * 1.1.0-or-earlier API surface, which the device's library does have.
+ * No SHA3 commands here - nothing has asked for them so far.
  */
+
+#endif /* NSHBOX_NO_CHECKSUMS */
 
 
 /* ------------------------------------------------------------------ */
@@ -7470,8 +7817,8 @@ static const command_t commands[] = {
     { "hexdump",  cmd_hexdump,  "Hex/ASCII dump" },
     { "file",     cmd_file,     "Identify file type (-b brief, -L follow links)" },
     { "stat",     cmd_stat,     "Show file information [--json]" },
-    { "head",     cmd_head,     "Show first lines (-n lines)" },
-    { "tail",     cmd_tail,     "Show last lines (-n lines)" },
+    { "head",     cmd_head,     "Show first lines/bytes (-n N, -N, -c N, -q, -v)" },
+    { "tail",     cmd_tail,     "Show last lines/bytes (-n [+]N, -N, -c [+]N, -q, -v)" },
     { "wc",       cmd_wc,       "Count lines/words/bytes (-lwc)" },
     { "sort",     cmd_sort,     "Sort lines (-r reverse, -n numeric, -u unique)" },
     { "tee",      cmd_tee,      "Copy stdin to stdout/files (-a)" },
@@ -7484,11 +7831,13 @@ static const command_t commands[] = {
     { "tree",     cmd_tree,     "Show a directory tree, box-drawing style [-L level] [path]" },
     { "tar",      cmd_tar,      "Create/extract/list a ustar archive (-cxt[zv] -f archive [-C dir] [path ...])" },
     { "iotest",   cmd_iotest,   "Sequential read/write throughput test (-w file size|-t s|-n N [cap] | -r file)" },
+#ifndef NSHBOX_NO_CHECKSUMS
     { "sha256sum",cmd_sha256sum,"Print SHA-256 checksums [--json]" },
     { "sha1sum",  cmd_sha1sum,  "Print SHA-1 checksums [--json]" },
     { "sha384sum",cmd_sha384sum,"Print SHA-384 checksums [--json]" },
     { "sha512sum",cmd_sha512sum,"Print SHA-512 checksums [--json]" },
     { "md5sum",   cmd_md5sum,   "Print MD5 checksums [--json]" },
+#endif
     { "base64",   cmd_base64,   "Base64 encode/decode (-d decode, -u URL-safe alphabet, -w cols wrap, 0 = no wrap) [file]" },
     { "jwt",      cmd_jwt,      "Decode a JWT's payload (--header for header, --all for both) - no signature verification [token]" },
     { "json",     cmd_json,     "Pretty-print JSON, 2-space indent [file]" },
@@ -7636,8 +7985,9 @@ static void usage(void)
     size_t i;
 
     printf(
-        "\nnshbox %s - tiny Linux toolbox\n\n",
-        NSHBOX_VERSION
+        "\nnshbox %s%s - tiny Linux toolbox\n\n",
+        NSHBOX_VERSION,
+        NSHBOX_VARIANT
     );
 
     printf("Usage:\n");
@@ -7697,11 +8047,9 @@ static void usage(void)
  * argv entry to "--json" in place, so the target command's own,
  * unchanged, already-tested arg parser sees exactly the flag it already
  * understands, then captures everything that command writes to stdout
- * via open_memstream() (glibc's/POSIX's stdout is a real, reassignable
- * FILE* global, not just an opaque macro - this is standard, portable
- * behavior on this project's actual target platforms, not a hack
- * specific to one libc) instead of letting it reach the terminal
- * directly, and re-emits the captured output pretty-printed once the
+ * (by running it in a child process with a pipe as stdout, see below)
+ * instead of letting it reach the terminal directly, and re-emits the
+ * captured output pretty-printed once the
  * command has finished. A command that does not understand --json at
  * all just gets its own normal "unrecognized option" from --json.
  *
@@ -7715,10 +8063,12 @@ static int dispatch_command(const command_t *cmd, int argc, char **argv)
 {
     int i;
     int pretty = 0;
-    FILE *captured;
+    int fds[2];
+    pid_t pid;
+    int status = 0;
     char *buf = NULL;
     size_t buf_len = 0;
-    FILE *real_stdout;
+    size_t buf_cap = 0;
     int rc;
 
     for (i = 0; i < argc; i++) {
@@ -7731,21 +8081,80 @@ static int dispatch_command(const command_t *cmd, int argc, char **argv)
     if (!pretty)
         return cmd->func(argc, argv);
 
-    captured = open_memstream(&buf, &buf_len);
-    if (!captured) {
-        perror("open_memstream");
+    /* The command runs in a child process whose stdout is a pipe; this
+     * process reads it all and pretty-prints it. Not by reassigning the
+     * stdout variable: that only compiles where stdout is a plain global
+     * (glibc) and is a read-only constant on musl. The commands opting in
+     * here only report, so running one in a child changes nothing. */
+    if (pipe(fds) != 0) {
+        perror("pipe");
         return 1;
     }
 
     fflush(stdout);
-    real_stdout = stdout;
-    stdout = captured;
 
-    rc = cmd->func(argc, argv);
+    pid = fork();
 
-    fflush(stdout);
-    stdout = real_stdout;
-    fclose(captured);
+    if (pid < 0) {
+        perror("fork");
+        close(fds[0]);
+        close(fds[1]);
+        return 1;
+    }
+
+    if (pid == 0) {
+        close(fds[0]);
+
+        if (dup2(fds[1], STDOUT_FILENO) < 0) {
+            perror("dup2");
+            _exit(1);
+        }
+
+        close(fds[1]);
+        rc = cmd->func(argc, argv);
+        fflush(stdout);
+        _exit(rc & 0xff);
+    }
+
+    close(fds[1]);
+
+    for (;;) {
+        ssize_t n;
+
+        if (buf_len == buf_cap) {
+            char *bigger;
+
+            buf_cap = buf_cap ? buf_cap * 2 : 4096;
+            bigger = realloc(buf, buf_cap);
+
+            if (bigger == NULL) {
+                fprintf(stderr, "nshbox: out of memory\n");
+                free(buf);
+                close(fds[0]);
+                waitpid(pid, NULL, 0);
+                return 1;
+            }
+
+            buf = bigger;
+        }
+
+        n = read(fds[0], buf + buf_len, buf_cap - buf_len);
+
+        if (n < 0 && errno == EINTR)
+            continue;
+
+        if (n <= 0)
+            break;
+
+        buf_len += (size_t)n;
+    }
+
+    close(fds[0]);
+
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        ;
+
+    rc = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 
     if (buf_len > 0) {
         FILE *in = fmemopen(buf, buf_len, "r");
@@ -7789,7 +8198,10 @@ int main(int argc, char **argv)
      *   netstat -l
      */
 
-    if (strcmp(name, "nshbox") == 0) {
+    /* "nshbox" or any nshbox-<suffix> name (e.g. the nshbox-static debug
+     * build, which is run under its own file name) is the multi-call
+     * binary itself, not an applet name. No command starts with "nshbox". */
+    if (strncmp(name, "nshbox", 6) == 0) {
 
         if (argc < 2) {
             usage();
@@ -7797,7 +8209,7 @@ int main(int argc, char **argv)
         }
 
         if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
-            printf("nshbox %s\n", NSHBOX_VERSION);
+            printf("nshbox %s%s\n", NSHBOX_VERSION, NSHBOX_VARIANT);
             return 0;
         }
 

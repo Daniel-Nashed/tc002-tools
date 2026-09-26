@@ -3,12 +3,18 @@
 # Source this file; do not execute it directly.
 set -euo pipefail
 
-TARGET_TRIPLE="arm-linux-gnueabihf"
-TARGET_CC="arm-linux-gnueabihf-gcc"
-TARGET_CXX="arm-linux-gnueabihf-g++"
-TARGET_STRIP="arm-linux-gnueabihf-strip"
-TARGET_AR="arm-linux-gnueabihf-ar"
-TARGET_CFLAGS="-Os"
+# The cross toolchain variables are set by the TC002_TOOLCHAIN=musl block
+# below (only the ARM build container in build/docker-alpine-arm sets it). They
+# are empty in the two native containers (build/docker-alpine, build/docker-ubuntu):
+# those build host-side tools and tests with the plain "cc"/"gcc" and do not
+# cross-compile anything.
+TARGET_TRIPLE=""
+TARGET_CC=""
+TARGET_CXX=""
+TARGET_STRIP=""
+TARGET_AR=""
+TARGET_CFLAGS=""
+TARGET_LDFLAGS_SIZE=""
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${REPO_ROOT}/dist"
@@ -40,6 +46,28 @@ OPENSSL_INSTALL_DIR="${DIST_DIR}/openssl"
 # runtime/on-demand-run.sh's CURL_CA_BUNDLE export) is not forced to build
 # the much slower, genuinely optional OpenSSL CLI just to get one.
 CA_BUNDLE_INSTALL_DIR="${DIST_DIR}/ca-bundle"
+
+# The ARM toolchain, on only when TC002_TOOLCHAIN=musl (set by the image in
+# build/docker-alpine-arm, nowhere else): the ARM32 musl cross compiler for
+# STATIC binaries. Every device component's script calls require_musl_toolchain.
+# Its sources and libraries live in build/work-musl, and the outputs go to dist/.
+# (build/work is only the scratch directory of the native containers.)
+if [ "${TC002_TOOLCHAIN:-}" = "musl" ]; then
+  TARGET_TRIPLE="arm-linux-musleabihf"
+  TARGET_CC="${TARGET_TRIPLE}-gcc"
+  TARGET_CXX="${TARGET_TRIPLE}-g++"
+  TARGET_STRIP="${TARGET_TRIPLE}-strip"
+  TARGET_AR="${TARGET_TRIPLE}-ar"
+  # Size: every function and data item in its own section, and the linker
+  # (--gc-sections, see TARGET_LDFLAGS_SIZE) drops the ones nothing uses.
+  # Matters most for static binaries, which link whole archives (musl,
+  # zlib, mbedTLS, ncurses) of which a program uses only a part - 7-Zip
+  # went from 2.27 MB to 1.67 MB with just this and -Os.
+  TARGET_CFLAGS="-Os -ffunction-sections -fdata-sections"
+  TARGET_LDFLAGS_SIZE="-Wl,--gc-sections"
+  WORK_DIR="${REPO_ROOT}/build/work-musl"
+  MBEDTLS_INSTALL_DIR="${WORK_DIR}/mbedtls-install"
+fi
 
 log()
 {
@@ -77,17 +105,42 @@ require_cmd()
   fi
 }
 
-# Refuses to run a build script outside the tc002-tools-build container -
-# the container sets TC002_TOOLS_CONTAINER=1 (see build/docker/Dockerfile).
+# For the scripts of the device components (see the TC002_TOOLCHAIN block
+# above): refuses to run outside the ARM musl container, where TARGET_CC is
+# empty and there is no cross compiler at all.
+require_musl_toolchain()
+{
+  if [ "${TC002_TOOLCHAIN:-}" != "musl" ]; then
+    die "this component is built with the static musl toolchain - use its root ./build_*.sh wrapper (or ./build_all.sh), which runs it in build/docker-alpine-arm"
+  fi
+}
+
+# Checks that a built binary is really a fully static ARM executable: no
+# NEEDED library entries and no program interpreter.
+verify_static_binary()
+{
+  local path="$1"
+  local needed interp
+
+  needed="$(readelf -d "$path" 2>/dev/null | grep NEEDED || true)"
+  interp="$(readelf -l "$path" 2>/dev/null | grep -i 'program interpreter' || true)"
+
+  if [ -n "$needed" ] || [ -n "$interp" ]; then
+    die "${path} is not fully static (${needed} ${interp})"
+  fi
+
+  log "verified: ${path##*/} has no NEEDED libraries and no program interpreter"
+}
+
+# Refuses to run a build script outside a tc002-tools build container - the
+# container sets TC002_TOOLS_CONTAINER=1 (see build/docker-alpine-arm/Dockerfile).
 # Running build_dropbear.sh/build_nshbox.sh directly on an unprepared host
 # fails partway through with a confusing "tar: Cannot exec bzip2"-style
-# error instead of this clear one. If you really are on a host prepared by
-# build/setup_build_platform.sh, export TC002_TOOLS_CONTAINER=1 yourself
-# first - see docs/build_platform.md.
+# error instead of this clear one - see docs/build_platform.md.
 require_container()
 {
   if [ "${TC002_TOOLS_CONTAINER:-}" != "1" ]; then
-    die "this must run inside the tc002-tools-build container - use: build/docker/run.sh build/<script>.sh (see build/docker/README.md). If this host was prepared with build/setup_build_platform.sh instead, export TC002_TOOLS_CONTAINER=1 first."
+    die "this must run inside a tc002-tools build container - use the root ./build_*.sh wrapper, or build/docker-alpine-arm/run.sh build/<script>.sh (see build/docker-alpine-arm/README.md)."
   fi
 }
 
@@ -126,7 +179,7 @@ log_success()
   fi
 }
 
-# Shared between build/build_all.sh's own end-of-run summary and the root
+# Shared between build/build_all_musl.sh's own end-of-run summary and the root
 # build_all.sh wrapper's early-exit path (when everything is already
 # built and the container never even launches) - both want the exact same
 # "here's what's actually on disk, and here's how to get the rest" report,
@@ -137,7 +190,7 @@ log_success()
 print_build_summary()
 {
   header "built"
-  [ -f "${DIST_DIR}/dropbear" ] && log "  dropbear, scp, dropbearkey, dbclient, dropbearconvert"
+  [ -f "${DIST_DIR}/dropbearmulti" ] && log "  dropbearmulti (dropbear, scp, dropbearkey, dbclient, dropbearconvert)"
   [ -f "${DIST_DIR}/nshbox" ] && log "  nshbox"
   [ -f "${DIST_DIR}/kilo" ] && log "  kilo"
   [ -f "${DIST_DIR}/gzip" ] && log "  gzip"
@@ -186,4 +239,31 @@ if [ -z "${MAKEFLAGS:-}" ] && [ -z "${TC002_TOOLS_SKIP_MAKEFLAGS_BANNER:-}" ]; t
   fi
   export MAKEFLAGS="-j${BUILD_JOBS}"
   header "using ${BUILD_JOBS} parallel make job(s) (MAKEFLAGS=${MAKEFLAGS})"
+fi
+
+# How long every build script took, printed when it exits (also when it
+# fails or is interrupted - a failed build's time is useful too). This file is
+# sourced by every build script, so every one reports its own time, and a
+# wrapper such as build_all_musl.sh reports the total after the components it
+# ran each printed theirs. Skipped for the host-side scripts and the install
+# scripts, which set TC002_TOOLS_SKIP_MAKEFLAGS_BANNER before sourcing this
+# file and have nothing to time. An EXIT trap does not change the script's own
+# exit status.
+if [ -z "${TC002_TOOLS_SKIP_MAKEFLAGS_BANNER:-}" ]; then
+  TC002_BUILD_START_EPOCH="$(date +%s)"
+
+  print_build_elapsed()
+  {
+    local exit_code=$?
+    local elapsed=$(( $(date +%s) - TC002_BUILD_START_EPOCH ))
+    local status="ok"
+
+    if [ "$exit_code" -ne 0 ]; then
+      status="FAILED, exit code ${exit_code}"
+    fi
+
+    log "$(basename "$0") took $(( elapsed / 60 ))m $(( elapsed % 60 ))s (${status})"
+  }
+
+  trap print_build_elapsed EXIT
 fi

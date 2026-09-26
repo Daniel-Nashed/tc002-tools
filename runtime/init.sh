@@ -73,7 +73,23 @@ done
 # install/common.sh) - checked here, not just left to fail later, so a
 # missing one shows up as a clear warning at boot instead of a confusing
 # "command not found" the first time someone tries to use it over SSH.
-for name in dropbear scp dropbearkey dbclient dropbearconvert nshbox kilo gzip
+# dropbear, scp, dropbearkey, dbclient and dropbearconvert are symlinks to
+# ONE multi-call binary, dropbearmulti (each program runs according to the
+# name it is started as - see build/build_dropbear.sh). Recreate any that is
+# missing or broken, so a partial install or a lost link cannot leave the
+# device without ssh. An existing working file of that name (e.g. an old
+# separate binary) is left alone.
+if [ -x "${BIN_DIR}/dropbearmulti" ]; then
+  for name in dropbear scp dropbearkey dbclient dropbearconvert
+  do
+    if [ ! -x "${BIN_DIR}/${name}" ]; then
+      ln -sf dropbearmulti "${BIN_DIR}/${name}" && log "restored ${BIN_DIR}/${name} -> dropbearmulti" \
+        || log "warning: could not create ${BIN_DIR}/${name}"
+    fi
+  done
+fi
+
+for name in dropbearmulti dropbear scp dropbearkey dbclient dropbearconvert nshbox kilo gzip
 do
   if [ ! -x "${BIN_DIR}/${name}" ]; then
     log "warning: ${BIN_DIR}/${name} missing or not executable"

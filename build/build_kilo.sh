@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Cross-builds kilo (antirez's small terminal text editor) for the TC002
-# (arm-linux-gnueabihf). Independent of Dropbear and nshbox - a small,
+# (arm-linux-musleabihf), FULLY STATIC, with the musl toolchain in
+# build/docker-alpine-arm. Independent of Dropbear and nshbox - a small,
 # genuinely useful thing to have available over the SSH session this
 # project provides, nothing more.
 set -euo pipefail
@@ -52,8 +53,12 @@ clone_and_verify_source()
 
 compile()
 {
-  ( cd "$SRC_DIR" && "$TARGET_CC" -O2 -o kilo kilo.c ) \
+  # -static: no shared libraries at all (musl's libc is linked in) - the
+  # binary needs nothing from the device's own rootfs.
+  ( cd "$SRC_DIR" && "$TARGET_CC" $TARGET_CFLAGS -static $TARGET_LDFLAGS_SIZE -o kilo kilo.c ) \
     || die "compile failed"
+
+  verify_static_binary "${SRC_DIR}/kilo"
 
   log_deliverable "${SRC_DIR}/kilo"
 }
@@ -76,7 +81,7 @@ write_manifest()
   local commit
   commit="$(project_git_commit)"
   local cc_version
-  cc_version="$("$TARGET_CC" --version | head -n1)"
+  cc_version="$("$TARGET_CC" --version | sed -n '1p')"
   local size
   size="$(stat -c%s "$path")"
   local sha256
@@ -104,10 +109,12 @@ write_manifest()
 main()
 {
   require_container
+  require_musl_toolchain
 
   header "kilo: checking prerequisites"
   require_cmd git
   require_cmd sha256sum
+  require_cmd readelf
   require_cmd "$TARGET_CC"
   require_cmd "$TARGET_STRIP"
 

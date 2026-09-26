@@ -12,8 +12,8 @@ reimplementations actually behave the way they claim to - not just that they com
 
 Runs entirely inside a separate Ubuntu container - see [build/docker-ubuntu/README.md](../../build/docker-ubuntu/README.md)
 for why this needs a different container than the ARM cross-build one. One command: builds nshbox natively
-(dynamically linked, x86 - not the ARM device binary, and deliberately not
-[build/test_build_nshbox_x86.sh](../../build/test_build_nshbox_x86.sh)'s statically-linked build, which exists to let
+(dynamically linked, for the host's own architecture - not the ARM device binary, and deliberately not
+[build/test_build_nshbox_native.sh](../../build/test_build_nshbox_native.sh)'s statically-linked build, which exists to let
 that binary be copied out and run on an arbitrary host - this one never leaves the container it was built in, so
 plain dynamic linking is simpler and avoids a real link failure a static build hits against a modern OpenSSL 3.x, see
 [build/test_nshbox_functional.sh](../../build/test_nshbox_functional.sh)'s own comment), builds this test harness,
@@ -21,8 +21,8 @@ and runs it - printing `PASS`/`FAIL` per test and a summary, with a non-zero exi
 
 ## Scope: what this does and does not prove
 
-This tests **logic correctness** - parsing, formatting, edge cases - by running nshbox compiled for x86 against real
-x86 reference tools in a controlled environment. It does **not** replace on-device verification for anything
+This tests **logic correctness** - parsing, formatting, edge cases - by running nshbox compiled for the host's architecture against real
+reference tools in a controlled environment. It does **not** replace on-device verification for anything
 platform-specific: the TC002's ancient OpenSSL 1.1.0i quirks, BusyBox gaps, or ARM-specific behavior are still the
 job of `verify.sh` (artifact shape) and manual on-device testing (see [docs/architecture.md](../../docs/architecture.md)'s
 "Verified vs. experimental"). A command whose whole point is reporting the *running system's own* live state
@@ -54,7 +54,7 @@ another `test_*.cpp` file (see below) - no other file needs to change.
 
 **`ldd` cannot be covered by this harness at all**, not just "not yet": `cmd_ldd()` in `nshbox.c` is hardcoded to
 `execv("/lib/ld-linux-armhf.so.3", ...)` - the ARM dynamic linker's own `--list` mode, the same trick glibc's real
-`ldd` uses under the hood. That path does not exist on the x86 build this harness runs, and never will - `ldd` is
+`ldd` uses under the hood. That path does not exist on the native build this harness runs, and never will - `ldd` is
 architecturally ARM-only, not a gap worth chasing here. That includes `ldd --json` and its line parser
 (`ldd_json_entry()`), which has to be checked by hand on the device, e.g. `nshbox ldd --json /data/bin/nshbox`.
 

@@ -3,9 +3,11 @@
 
 # Disposable build workdirs (source extraction, object files)
 /build/work/
+/build/work-musl/
 *.o
 *.a
 /nshbox/src/nshbox
+/nshbox/src/nshbox-static
 /tc002-discover/src/tc002-discover
 /tests/nshbox/nshbox_tests
 

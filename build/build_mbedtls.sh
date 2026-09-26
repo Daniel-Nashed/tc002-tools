@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Cross-builds mbedTLS for the TC002 (arm-linux-gnueabihf), as a static-only
-# library dependency for curl's TLS support - see build_curl.sh and
-# curl/README.md. Not a deliverable in its own right: nothing here ever
+# Cross-builds mbedTLS for the TC002 (arm-linux-musleabihf, the static musl
+# toolchain in build/docker-alpine-arm), as a static-only library dependency
+# for curl's TLS support and nshbox's checksum commands - see build_curl.sh,
+# build_nshbox.sh and curl/README.md. Not a deliverable in its own right: nothing here ever
 # lands in dist/, only in this project's private build workspace, for
 # build_curl.sh's --with-mbedtls to consume.
 set -euo pipefail
@@ -82,6 +83,36 @@ extract_source()
   if [ ! -d "$SRC_DIR" ]; then
     die "expected extracted source directory not found: ${SRC_DIR} (tarball layout may have changed)"
   fi
+}
+
+# Project settings for mbedTLS's own configuration header.
+#
+# MBEDTLS_PLATFORM_DEV_RANDOM: where mbedTLS reads random bytes when it cannot
+# use the getrandom() system call - which is the case on musl (it only uses
+# getrandom() with glibc, see library/entropy_poll.c). Its default is
+# "/dev/random". On the TC002's kernel (4.9) that is the BLOCKING pool: a read
+# needs entropy credit for every bit asked for, curl seeds its generator with
+# 2 x 128 bytes at startup, and the device only has about 60 bits credited
+# (/proc/sys/kernel/random/entropy_avail) - so every curl start, even
+# "curl --version", waited forever. Confirmed with "qemu-arm -strace curl
+# --version" (open("/dev/random") + readv of 128 bytes, twice). /dev/urandom
+# never blocks and, once the kernel's generator is initialised (it is:
+# getrandom() works on this device, nginx/OpenSSL use it), gives the same quality.
+apply_project_config()
+{
+  local config_h="${SRC_DIR}/include/mbedtls/mbedtls_config.h"
+  local before='//#define MBEDTLS_PLATFORM_DEV_RANDOM "/dev/random"'
+  local after='#define MBEDTLS_PLATFORM_DEV_RANDOM "/dev/urandom"'
+
+  grep -qF -- "$before" "$config_h" \
+    || die "expected line '${before}' not found in ${config_h} - mbedTLS's configuration header changed; find the new spelling of MBEDTLS_PLATFORM_DEV_RANDOM and update apply_project_config()"
+
+  sed -i "s|^${before}\$|${after}|" "$config_h"
+
+  grep -qF -- "$after" "$config_h" \
+    || die "the MBEDTLS_PLATFORM_DEV_RANDOM change did not apply to ${config_h}"
+
+  log "mbedTLS: MBEDTLS_PLATFORM_DEV_RANDOM set to /dev/urandom (the /dev/random default blocks on this device)"
 }
 
 configure_and_build()
@@ -173,6 +204,27 @@ verify_static_archives()
   done
 }
 
+# The built library must read /dev/urandom and never /dev/random - a
+# regression here is invisible in a build and only shows on the device, as
+# every curl start hanging. The strings are captured first and searched as a
+# variable (a pipe into "grep -q" is a false-negative trap under pipefail).
+verify_entropy_device()
+{
+  require_cmd strings
+
+  local text
+  text="$(strings "${SRC_DIR}/library/libmbedcrypto.a")"
+
+  grep -qF -- '/dev/urandom' <<<"$text" \
+    || die "libmbedcrypto.a does not contain /dev/urandom - MBEDTLS_PLATFORM_DEV_RANDOM did not take effect"
+
+  if grep -qF -- '/dev/random' <<<"$text"; then
+    die "libmbedcrypto.a still contains /dev/random - it would block on the device (see apply_project_config())"
+  fi
+
+  log "verified: libmbedcrypto.a reads /dev/urandom, not /dev/random"
+}
+
 install_to_prefix()
 {
   rm -rf "$INSTALL_DIR"
@@ -189,6 +241,7 @@ install_to_prefix()
 main()
 {
   require_container
+  require_musl_toolchain
 
   header "mbedtls ${MBEDTLS_VERSION}: checking prerequisites"
   require_cmd sha256sum
@@ -203,11 +256,15 @@ main()
   header "mbedtls ${MBEDTLS_VERSION}: extracting source"
   extract_source
 
+  header "mbedtls ${MBEDTLS_VERSION}: applying project configuration"
+  apply_project_config
+
   header "mbedtls ${MBEDTLS_VERSION}: building static libraries only"
   configure_and_build
 
   header "mbedtls ${MBEDTLS_VERSION}: verifying the archives are real arm-linux-gnueabihf objects"
   verify_static_archives
+  verify_entropy_device
 
   header "mbedtls ${MBEDTLS_VERSION}: installing to private prefix"
   install_to_prefix

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # THE command to build just OpenSSL. Runs inside the build container - see
-# build/docker/run.sh, docs/build_platform.md.
+# build/docker-alpine-arm/README.md (static musl toolchain).
 #
 # Not a deliverable of its own in the usual sense - see nginx/README.md
 # and build/build_openssl.sh. Exists as its own top-level script, like
@@ -10,4 +10,4 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-exec "${SCRIPT_DIR}/build/docker/run.sh" build/build_openssl.sh
+exec "${SCRIPT_DIR}/build/docker-alpine-arm/run.sh" build/build_openssl.sh

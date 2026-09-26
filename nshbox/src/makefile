@@ -6,21 +6,52 @@ READELF = $(CROSS)readelf
 
 SRC     = nshbox.c
 
-CFLAGS  = -Os -Wall -Wextra
+# -ffunction-sections/-fdata-sections + --gc-sections: the linker drops the
+# parts of the static libraries (musl, mbedTLS) nshbox does not use.
+CFLAGS  = -Os -Wall -Wextra -ffunction-sections -fdata-sections
 
-# Dynamically linked against libcrypto: the sha256sum/sha1sum/sha512sum/md5sum
-# commands use OpenSSL's EVP interface. The device needs libcrypto.so.1.1
-# present at runtime as a result - see ../README.md for the size tradeoff
-# (statically linking it pulled in well over 1MB from OpenSSL's own internal
-# registration tables, for the same reason found and reversed in the
-# now-merged standalone sha256sum tool this replaced).
+# -lresolv: dig/nslookup use the C library's own stub resolver (res_query(),
+# ns_initparse()/ns_parserr(), dn_expand()). musl has these inside libc
+# (the -lresolv is then an empty stub); glibc keeps them in libresolv.
+LDFLAGS = -Wl,--gc-sections -lresolv
+
+# The sha256sum/sha1sum/sha384sum/sha512sum/md5sum commands use mbedTLS's
+# low-level digest functions, always linked STATICALLY (libmbedcrypto.a), so
+# the binary needs no crypto library on the device.
 #
-# -lresolv: dig/nslookup use glibc's own stub resolver (res_query(),
-# ns_initparse()/ns_parserr(), dn_expand()) - unlike libcrypto, this is
-# not a separate optional package with its own version-matching risk;
-# libresolv.so is an unconditional part of any glibc userland, the same
-# guarantee libc.so.6 itself already carries.
-LDFLAGS = -lcrypto -lresolv
+# MBEDTLS_DIR: prefix with include/ and lib/libmbedcrypto.a - the ARM build
+# passes the mbedTLS this project builds itself (build/build_mbedtls.sh).
+# Empty (the default) uses the system's libmbedtls-dev (-lmbedcrypto), which
+# is what the native test containers has.
+MBEDTLS_DIR =
+
+# CHECKSUMS=0 leaves out those five commands (-DNSHBOX_NO_CHECKSUMS), so
+# mbedTLS is not needed at all. Default is 1 (the normal build).
+#
+# STATIC=1 links everything statically, no shared libraries at all - a
+# binary that can be copied to /tmp on any device and run regardless of the
+# rootfs. Use TARGET=nshbox-static to build it beside the normal binary.
+CHECKSUMS = 1
+STATIC    = 0
+
+ifeq ($(CHECKSUMS),0)
+CFLAGS += -DNSHBOX_NO_CHECKSUMS
+else
+ifeq ($(MBEDTLS_DIR),)
+# The archive's full path (not -lmbedcrypto), so the link is static whether
+# or not the shared library is installed beside it, and STATIC=1 needs no
+# -Bdynamic juggling. Prints just the bare name if it is not installed,
+# which then fails the link with a clear "No such file" error.
+LDFLAGS := $(shell $(CC) -print-file-name=libmbedcrypto.a) $(LDFLAGS)
+else
+CFLAGS  += -I$(MBEDTLS_DIR)/include
+LDFLAGS := $(MBEDTLS_DIR)/lib/libmbedcrypto.a $(LDFLAGS)
+endif
+endif
+
+ifeq ($(STATIC),1)
+LDFLAGS := -static $(LDFLAGS)
+endif
 
 all: $(TARGET)
 

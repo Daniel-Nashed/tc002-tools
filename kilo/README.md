@@ -22,13 +22,13 @@ independent confirmation that upstream history has not been rewritten.
 ./build_kilo.sh
 ```
 
-Runs inside the build container like every other `build/` script - see
-[../docs/build_platform.md](../docs/build_platform.md). Cross-compiles with `arm-linux-gnueabihf-gcc -O2`, strips the
-result, and writes `dist/kilo` plus `dist/manifest-kilo.json`.
+Runs in the Alpine ARM32 musl container ([../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)).
+Cross-compiles with `arm-linux-musleabihf-gcc -O2 -static` - a fully static binary that needs nothing from the
+device's rootfs - checks that it really is static, strips it, and writes `dist/kilo` plus `dist/manifest-kilo.json`.
 
 ## Status
 
-First pass, not yet installed or run on the actual device - `install/install-kilo.sh` does not exist yet. Compiles
-cleanly cross-compiled and natively, with two harmless warnings from upstream's own code under modern GCC (an
+Built static with musl, installed by `./tc002_setup.sh` (`install/install_kilo.sh`) and working on the device. It compiles
+cleanly, with two harmless warnings from upstream's own code under modern GCC (an
 unterminated string-initializer note and an ignored `write()` return value) - not patched, since this project does not
 maintain a fork of kilo's source, matching the same minimal-touch approach used for Dropbear.

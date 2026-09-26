@@ -7,7 +7,7 @@
 # This used to be a small side effect of build_openssl.sh's
 # install_artifacts(): a plain "cp" of this container's own
 # "ca-certificates" package (already installed for the container's own
-# HTTPS needs - see build/docker/Dockerfile, build/setup_build_platform.sh)
+# HTTPS needs - see build/docker-alpine-arm/Dockerfile)
 # into OpenSSL's device/etc/ssl tree, on the reasoning that "anything
 # needing a trust store here also needs OpenSSL, so tying the two together
 # means nothing extra to remember to build." That stopped holding once
@@ -44,7 +44,7 @@ package_bundle()
   local system_ca_bundle="/etc/ssl/certs/ca-certificates.crt"
 
   test -f "$system_ca_bundle" \
-    || die "${system_ca_bundle} not found in this container - is the ca-certificates package installed? (see build/docker/Dockerfile)"
+    || die "${system_ca_bundle} not found in this container - is the ca-certificates package installed? (see build/docker-alpine-arm/Dockerfile)"
 
   rm -rf "$CA_BUNDLE_INSTALL_DIR"
   mkdir -p "$DEVICE_DIR"

@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
-# THE command to build just curl. Runs inside the build container - see
-# build/docker/run.sh, docs/build_platform.md.
-#
-# Builds mbedTLS first - curl links against it statically for TLS support
-# (see curl/README.md and build_mbedtls.sh) - then curl itself, which
-# expects build_mbedtls.sh's static libraries/headers already installed
-# at build/work/mbedtls-install/.
+# THE command to build just curl (fully static, musl, mbedTLS). Runs inside
+# the Alpine ARM32 musl build container - see build/docker-alpine-arm/README.md.
+# Builds mbedTLS first if it is not built yet. Not part of a plain
+# ./build_all.sh: pass --with-curl (or --all) there.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-"${SCRIPT_DIR}/build/docker/run.sh" build/build_mbedtls.sh
-exec "${SCRIPT_DIR}/build/docker/run.sh" build/build_curl.sh
+exec "${SCRIPT_DIR}/build/docker-alpine-arm/run.sh" build/build_curl.sh

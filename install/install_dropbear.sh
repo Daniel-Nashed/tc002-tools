@@ -31,8 +31,12 @@ usage()
 Usage: install_dropbear.sh [--device SERIAL] [--config FILE]
                             [--authorized-key FILE] [--skip-dropbearkey]
 
-Pushes dist/dropbear, dist/scp, dist/dropbearkey, dist/dbclient, and
-dist/dropbearconvert to INSTALL_PREFIX/bin, pushes runtime/init.sh to
+Pushes dist/dropbearmulti (ONE multi-call binary containing dropbear, scp,
+dropbearkey, dbclient and dropbearconvert) to INSTALL_PREFIX/bin and creates
+symlinks named dropbear, scp, dropbearkey, dbclient and dropbearconvert
+pointing at it - each program runs according to the name it is started as.
+Any old separate binary of one of those names is replaced by its symlink.
+Also pushes runtime/init.sh to
 INSTALL_PREFIX/bin/init.sh, runtime/sshd.sh to INSTALL_PREFIX/bin/sshd.sh,
 and installs an authorized_keys file. If no --authorized-key/AUTHORIZED_KEY
 is given, falls back to $HOME/.ssh/id_ed25519.pub, asking first (or
@@ -48,9 +52,9 @@ formats - see docs/dropbear.md.
   --config FILE          Config file (default: config/tc002-tools.conf).
   --authorized-key FILE  SSH public key file (overrides AUTHORIZED_KEY;
                            default: ask to use/generate $HOME/.ssh/id_ed25519).
-  --skip-dropbearkey      Do not push dropbearkey (sshd.sh will fail to
-                           generate a host key on-device unless one already
-                           exists, or is provided another way).
+  --skip-dropbearkey      Do not create the dropbearkey symlink (sshd.sh will
+                           fail to generate a host key on-device unless one
+                           already exists, or is provided another way).
   -h, --help              Show this help.
 EOF
 }
@@ -102,13 +106,20 @@ push_binaries()
 {
   local name
 
+  install_binary "dropbearmulti"
+
+  # Relative link targets, next to the binary - the same layout "nshbox
+  # install" uses, and runtime/init.sh repairs missing links at every boot.
+  # ln -sf replaces an old separate binary of the same name; a running
+  # dropbear keeps working (its open binary stays valid until it exits).
   for name in dropbear scp dropbearkey dbclient dropbearconvert
   do
     if [ "$name" = "dropbearkey" ] && [ "$SKIP_DROPBEARKEY" -eq 1 ]; then
       continue
     fi
 
-    install_binary "$name"
+    adb -s "$DEVICE" shell "cd ${INSTALL_PREFIX}/bin && ln -sf dropbearmulti ${name}"
+    log "linked ${INSTALL_PREFIX}/bin/${name} -> dropbearmulti"
   done
 }
 

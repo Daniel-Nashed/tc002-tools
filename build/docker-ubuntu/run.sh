@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Standard entrypoint for running anything under build/ or tests/ inside
 # the tc002-tools-test-ubuntu container - the Ubuntu/glibc native-build
-# counterpart to build/docker/run.sh and build/docker-alpine/run.sh, used
+# counterpart to build/docker-alpine-arm/run.sh and build/docker-alpine/run.sh, used
 # only by build/test_nshbox_functional.sh (see build/docker-ubuntu/Dockerfile
 # for why this needs a separate image from both of those). Always rebuilds
 # the image first - cheap and near-instant when the Dockerfile has not

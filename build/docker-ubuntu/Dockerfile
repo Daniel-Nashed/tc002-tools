@@ -1,24 +1,18 @@
 # Native (not cross-compile) build platform for the nshbox functional test
 # harness (tests/nshbox/) - the one component in this project that neither
 # targets the TC002 nor talks to a real device at all. Every device
-# component cross-compiles via build/docker's Debian Buster image;
+# component cross-compiles via build/docker-alpine-arm;
 # tests/nshbox/ instead runs entirely on whatever machine is running it, so
 # it needs a plain native build, not an ARM cross-compile - same reasoning
 # as build/docker-alpine, for an unrelated purpose (see that image's own
 # README for why IT is separate).
 #
-# Ubuntu, specifically - not Alpine, and not a second use of build/docker's
-# existing Buster image: this harness diffs nshbox's own output against
-# real GNU coreutils/tar/grep (see nshbox/README.md's "GNU-coreutils-
-# output-compatible" claims), and Alpine's own userland is BusyBox, not
-# GNU - the wrong reference tools entirely for that comparison. Buster's
-# own container technically already has a native g++ (via build-essential)
-# and libssl-dev (kept there for build/test_build_nshbox_x86.sh - see that
-# Dockerfile's own comment) and IS genuine GNU coreutils, so it would
-# probably work - but it is also EOL and frozen at whatever coreutils
-# version shipped with Buster in 2019, which is a worse reference than a
-# current Ubuntu LTS's own coreutils, and folding test-only tooling into
-# the image that produces real device deliverables would blur a
+# Ubuntu, specifically - not Alpine: this harness diffs nshbox's own output
+# against real GNU coreutils/tar/grep (see nshbox/README.md's "GNU-coreutils-
+# output-compatible" claims), and Alpine's own userland is BusyBox, not GNU -
+# the wrong reference tools entirely for that comparison. A current Ubuntu LTS
+# also has a native g++ and a current coreutils, and keeping test-only tooling
+# out of the images that produce real device deliverables preserves a
 # distinction worth keeping sharp (see build/docker-alpine/README.md's
 # "why a separate image, not one flag on the existing one").
 #
@@ -31,11 +25,11 @@ FROM ubuntu:26.04
 ARG DEBIAN_FRONTEND=noninteractive
 
 # build-essential: native gcc, g++, make, binutils - everything both
-# nshbox's own x86 test build (build/test_build_nshbox_x86.sh, plain C)
-# and the C++ test harness (tests/nshbox/) need. libssl-dev: nshbox's
-# checksum commands link libcrypto - build/test_build_nshbox_x86.sh
-# statically links it for this exact build (see its own comment), which
-# still needs libcrypto.a present at link time regardless. Real GNU
+# nshbox's own native test build (build/test_build_nshbox_native.sh, plain C)
+# and the C++ test harness (tests/nshbox/) need. libmbedtls-dev: nshbox's
+# checksum commands use mbedTLS's digest functions, linked statically
+# (nshbox/src/makefile picks up libmbedcrypto.a), which needs the static
+# library and headers present at build time. Real GNU
 # coreutils/tar/grep/sed/gzip are already part of any standard Ubuntu
 # image without any extra package - they are the "platform reference
 # tools" this harness diffs nshbox's own output against. tree and
@@ -46,7 +40,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         build-essential \
-        libssl-dev \
+        libmbedtls-dev \
         ca-certificates \
         tree \
         psmisc \
@@ -56,8 +50,8 @@ RUN set -eux; \
 WORKDIR /work
 
 # Marks this environment as a build container, so build/common.sh's
-# require_container() accepts it the same way it accepts the Buster and
-# Alpine images - see that function's own comment in build/common.sh.
+# require_container() accepts it the same way it accepts the Alpine
+# images - see that function's own comment in build/common.sh.
 ENV TC002_TOOLS_CONTAINER=1
 
 ENTRYPOINT ["/bin/bash"]

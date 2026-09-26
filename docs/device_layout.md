@@ -3,11 +3,12 @@
 ## Canonical layout
 
 ```text
-/data/bin/dropbear
-/data/bin/scp
-/data/bin/dropbearkey              (optional after initial provisioning)
-/data/bin/dbclient                 (Dropbear's own SSH client - outgoing connections only)
-/data/bin/dropbearconvert          (converts key formats - see below)
+/data/bin/dropbearmulti            (the ONE Dropbear binary: server, client, scp, key tools - see below)
+/data/bin/dropbear                 -> dropbearmulti (symlink; the server)
+/data/bin/scp                      -> dropbearmulti (symlink)
+/data/bin/dropbearkey              -> dropbearmulti (symlink; optional after initial provisioning)
+/data/bin/dbclient                 -> dropbearmulti (symlink; Dropbear's own SSH client - outgoing connections only)
+/data/bin/dropbearconvert          -> dropbearmulti (symlink; converts key formats - see below)
 /data/bin/init.sh                  (the on-device entry point - checks/refreshes/starts, see below)
 /data/bin/sshd.sh                  (starts dropbear, called by init.sh - see below)
 /data/bin/setup_etc.sh             (called by sshd.sh, also runnable on its own - see below)
@@ -60,11 +61,9 @@ referenced:
 /data/home                               0755  0:0
 /data/home/.ssh                          0700  0:0
 /data/home/.ssh/authorized_keys          0600  0:0
-/data/bin/dropbear                       0755  0:0
-/data/bin/scp                            0755  0:0
-/data/bin/dropbearkey                    0755  0:0
-/data/bin/dbclient                       0755  0:0
-/data/bin/dropbearconvert                0755  0:0
+/data/bin/dropbearmulti                  0755  0:0
+/data/bin/dropbear -> dropbearmulti     (symlinks, likewise scp, dropbearkey,
+                                          dbclient, dropbearconvert)
 /data/bin/init.sh                        0755  0:0
 /data/bin/sshd.sh                        0755  0:0
 /data/home/dropbear_ed25519_host_key     0600  0:0
@@ -226,7 +225,7 @@ the single source of truth; this table just mirrors it for human reference.
 | init.sh, sshd.sh, setup_etc.sh                        | persistent           | startup-critical - `init.sh` is the documented on-device entry point, see [manual_rollout.md](manual_rollout.md) |
 | nshbox, kilo, gzip                                    | persistent           | small, frequently used; `gzip` is also the compressed-on-demand tier's own decompressor - see below |
 | ncdu (+`ncdu.bin`, wrapper, terminfo)                  | persistent           | only 204 KB - smaller than curl/nginx by 5-16x, not worth the on-demand tier's own overhead; see `install_etc.sh` |
-| curl, nginx, openssl, 7zz                             | compressed-on-demand | genuinely larger, occasional use - 7zz's dynamic build is ~1.6-2.1MB, closer to curl than any persistent tool here |
+| curl, nginx, openssl, 7zz                             | compressed-on-demand | genuinely larger, occasional use - 7zz is ~1.7 MB, closer to curl than any persistent tool here |
 | *(none yet)*                                          | ram                  | mechanism exists per-tool if ever needed - see below |
 
 The persistent, single-binary tools with nothing else special about them (`kilo`, `gzip`, `nshbox`) share one
@@ -242,8 +241,8 @@ device in the first place, see
 to be excluded the same way (built and pushed by hand, never through
 `deploy.sh`) but now joins the compressed-on-demand tier above like any
 other optional tool - see [`../7zip/README.md`](../7zip/README.md) for
-why it wasn't automated sooner, and `build/build_all.sh --with-7zip` (or
-`./build_all.sh build/build_7zip.sh` directly) to build it.
+why it wasn't automated sooner, and `./build_all.sh --with-7zip` (or
+`./build_7zip.sh` directly) to build it.
 
 **persistent** - `INSTALL_PREFIX/bin/<tool>` (`/data/bin/<tool>`), pushed by
 `install/install_binary()` and surviving reboot. This is every mode this
@@ -279,13 +278,24 @@ idea `nshbox install` already uses for its own applet symlinks. Running
 of the shared archive into `/tmp/bin/curl` (via
 `nshbox tar -xzf .../on-demand.tar.gz -C /tmp/bin curl` - see
 [`../nshbox/README.md`](../nshbox/README.md) for `tar`'s `-z` support and
-its selective-extraction error handling) **the first time** `curl` runs
-in a given boot, then `exec`s it directly - a cached copy in `/tmp/bin`
-(tmpfs, wiped on reboot anyway) is reused on every subsequent invocation
-rather than re-extracted every time. `install/install_on_demand.sh`
-clears any cached copy on the device whenever it pushes a fresh archive,
-so a redeploy within the same boot cannot leave a stale cached binary
-running unnoticed until the next reboot.
+its selective-extraction error handling) **every time** `curl` runs
+and it is not already there, runs it, and **deletes the unpacked copy when the tool exits** (exit status passed
+on; also on Ctrl-C). Before unpacking it checks that at least 6 MiB of memory is available and stops with a clear
+message if not. **Why:** `/tmp` is RAM, and this device has only about 36 MB of it in total. An earlier version cached every
+unpacked tool until reboot; after using all four (curl 1.1, nginx 3.0, openssl 3.2, 7zz 1.7 MB) 8.6 MB was gone, 5.9 MB
+remained available, and new processes could no longer start - a new `adb shell` was closed at once and the next unpack
+hung. Unpacking again costs a second or two of decompression per run. A copy already in `/tmp/bin` (put there by hand,
+or by `TC002_ON_DEMAND_KEEP=1`, which also runs the tool with `exec`) is used as it is and never deleted by the wrapper.
+A daemon such as nginx keeps running after its file is deleted. `install/install_on_demand.sh` still clears any leftover
+copy when it pushes a fresh archive.
+
+**RAM budget.** The TC002 has about 36 MB of RAM in total, of which only a few MB are free once its own UI (`zkgui`) and
+services run. Things that hold RAM until they are removed: anything in `/tmp` (unpacked tools, logs), running
+processes, and page cache. A binary that lives on flash (`/data/bin`) is paged in only as far as it is used and the
+kernel can drop those pages again, whereas the same binary unpacked into `/tmp` occupies its full size in RAM the whole
+time it is there - so keeping a big tool persistent on flash costs less RAM than unpacking it on demand, and costs
+flash instead. Check with `free` (nshbox) - the "Available" line - before starting anything big. The OpenSSL CLI
+(3.2 MB) is not packed by default for this reason; push it to `/tmp` only for a debugging session and delete it after.
 
 This is why `gzip` and `nshbox` themselves must stay **persistent**: they
 are the compressed-on-demand tier's own machinery. If either were itself
@@ -306,7 +316,7 @@ This is its **own** build step, [`../build/build_ca_bundle.sh`](../build/build_c
 part of `build_openssl.sh`, even though it used to be. Producing the bundle is just one `cp`, with zero dependency
 on actually cross-compiling OpenSSL, so tying it to that much slower, genuinely optional build meant declining the
 OpenSSL CLI silently broke curl's HTTPS too - confirmed as a real failure, not a hypothetical one (`mbedTLS: error
-reading CA cert file ...: PK - Read/write of file failed` on a real device). `build/build_all.sh` now builds the CA
+reading CA cert file ...: PK - Read/write of file failed` on a real device). `./build_all.sh` now builds the CA
 bundle unconditionally, alongside the other small/required components, regardless of whether `--with-openssl` was
 passed.
 

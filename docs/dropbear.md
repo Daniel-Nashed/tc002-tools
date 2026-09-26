@@ -129,7 +129,8 @@ The patch is verified end-to-end against a pristine download of the pinned tarba
 --fuzz=0`, and both a native (x86_64) build and a real ARMHF cross-build via `build/build_dropbear.sh` (in the container
 - see [build_platform.md](build_platform.md)) compile `dbutil.o` warning-free and produce a `dropbear` binary containing
 `__wrap_getpwnam`/`__wrap_getpwuid`. The cross-built artifacts (`dropbear`, `scp`, `dropbearkey`) are confirmed ARM
-32-bit hard-float, dynamically linked, and stripped - see the manifest fields listed in "Build outputs" below. Run on
+32-bit hard-float, fully static (musl - see
+[../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)), and stripped - see the manifest fields listed in "Build outputs" below. Run on
 the actual TC002 device: the synthetic passwd wrapper resolved `root` correctly across repeated `getpwnam()` calls
 (multiple PIDs, same session) and Ed25519 pubkey authentication succeeded - see the expected log pattern below, which
 matches what was actually observed. `$HOME`/`$PATH` inside an interactive session, SCP, and a clean session exit are
@@ -139,7 +140,7 @@ verified/experimental split.
 ### Verifying the patch took effect
 
 ```sh
-strings dist/dropbear | grep -F '/data/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+strings dist/dropbearmulti | grep -F '/data/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 nm dropbear.unstripped | grep -E '__wrap_getpwnam|__wrap_getpwuid'
 ```
 
@@ -207,13 +208,21 @@ the underlying condition evaluates correctly either way, this just stops it from
 
 ## Build outputs
 
-Stripped with the matching cross-toolchain:
+**Current build: one multi-call binary, fully static (musl).** `build/build_dropbear.sh` builds `dropbear`, `scp`,
+`dropbearkey`, `dbclient` and `dropbearconvert` with Dropbear's own `MULTI=1` mode into a single `dist/dropbearmulti`
+(see `MULTI.md` in the Dropbear source; no source changes). Every program's `main()` is renamed at compile time and
+`dbmulti.c` has the only real `main()`, which runs the program named by `argv[0]` (or by its first argument:
+`dropbearmulti dbclient host`). The shared code - musl, zlib, libtomcrypt, libtommath - is linked once. On the device
+`install/install_dropbear.sh` pushes the one file and creates symlinks named after the five programs
+(`dropbear -> dropbearmulti`, ...); `runtime/init.sh` recreates any that is missing at boot. The server re-executes
+itself for every connection (`svr-main.c`); that works through the symlink. Five separate static binaries were
+1,229 KB in total (dropbear 375, dbclient 363, dropbearconvert 202, dropbearkey 198, scp 91), against 561 KB for the
+earlier dynamic ones; the multi-call binary's size is recorded in `dist/manifest-dropbear.json`.
 
-```sh
-arm-linux-gnueabihf-strip dropbear scp dropbearkey dbclient dropbearconvert
-```
+The rest of this section is the history of the earlier dynamic build (the build script now strips with
+`arm-linux-musleabihf-strip`).
 
-Verified stripped sizes on the tested build (exact sizes vary with compiler and Dropbear version):
+Verified stripped sizes on that earlier (dynamic) build (exact sizes vary with compiler and Dropbear version):
 
 ```text
 dropbear      179236 bytes

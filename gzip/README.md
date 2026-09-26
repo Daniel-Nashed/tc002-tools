@@ -15,8 +15,8 @@ tarball fresh at build time, the same way every other `build/` script here handl
 Unlike curl's or nginx's own bundled zlib usage, GNU gzip has its own from-scratch `deflate`/inflate implementation
 (`deflate.c` in its real source) - confirmed directly, 2026-09-13, that its `configure.ac` never mentions zlib or
 `libz` at all. There is nothing to statically link here the way curl's zlib or nginx's zlib needed - `gzip` only
-ever depends on libc, confirmed by `build/build_gzip.sh`'s own `verify_artifact()` (`readelf -d` must show only
-`libc.so.6`/`ld-linux-armhf.so.3`, nothing else).
+ever depends on libc. It is now linked fully static against musl, so `build/build_gzip.sh`'s `verify_artifact()`
+requires no NEEDED entry at all (`readelf -d`) and no program interpreter.
 
 ## Build
 
@@ -24,30 +24,20 @@ ever depends on libc, confirmed by `build/build_gzip.sh`'s own `verify_artifact(
 ./build_gzip.sh
 ```
 
-Runs inside the build container like every other `build/` script - see
-[../docs/build_platform.md](../docs/build_platform.md). Downloads and checksum-verifies the pinned release tarball,
-cross-compiles via `./configure --disable-year2038 && make` (see "32-bit time_t" below for the one non-default
-flag), verifies the result has no unexpected dynamic dependency, strips it, and writes `dist/gzip` plus
-`dist/manifest-gzip.json`.
+Runs in the Alpine ARM32 musl container ([../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)).
+Downloads and checksum-verifies the pinned release tarball, cross-compiles via
+`LDFLAGS=-static ./configure --disable-year2038 && make` (see "32-bit time_t" below for the one non-default flag),
+verifies the result is fully static, strips it, and writes `dist/gzip` plus `dist/manifest-gzip.json`.
 
 ## 32-bit `time_t`
 
-gzip's gnulib-derived `configure` refuses by default to silently build with a 32-bit `time_t` on a target that
-could in principle support a wider one - confirmed by a real failed build against this project's own Docker
-container (2026-09-13): `configure: error: this system appears to support timestamps after mid-January 2038, but
-no mechanism for enabling wide 'time_t' was detected`. This did not show up in this project's earlier WSL
-cross-compile check, most likely because of a glibc version difference between that toolchain and this project's
-own build container's Debian Buster `libc6-dev-armhf-cross` (an older glibc with no 64-bit `time_t` support for
-`armhf` at all). Fixed with `--disable-year2038`, exactly as `configure`'s own error message suggests - the
-standard, intended answer for a 32-bit target, not a workaround: this device is 32-bit ARM EABI, so a 64-bit
-`time_t` was never on the table regardless of this flag. Verified afterward (via the same WSL environment) that
-passing it produces a byte-identical binary to the one built without it there, confirming this is a real no-op
-wherever the check would already have passed.
+gzip's gnulib-derived `configure` refuses by default to silently build with a 32-bit `time_t` on a 32-bit target:
+`configure: error: this system appears to support timestamps after mid-January 2038, but no mechanism for enabling
+wide 'time_t' was detected`. It is fixed with `--disable-year2038`, exactly as `configure`'s own error message
+suggests - the standard, intended answer for a 32-bit target, not a workaround: this device is 32-bit ARM EABI, and
+gzip's own timestamp field is 32-bit anyway. (musl's `time_t` is already 64-bit on 32-bit ARM, so with the current
+toolchain the flag only silences the check; it was needed with the older glibc toolchain.)
 
 ## Status
 
-Cross-compiled successfully in an independent WSL environment (2026-09-13), producing a real ARM ELF binary
-depending on nothing but `libc.so.6`/`ld-linux-armhf.so.3`. The `--disable-year2038` fix above was needed to get
-past a real failure in this project's own Docker container specifically - not yet re-confirmed that the full build
-succeeds end to end there with the fix applied. Not yet installed on the device or added to the default
-`./build_all.sh` pipeline either way.
+Built fully static (musl) in this project's own Alpine container, part of the default `./build_all.sh` pipeline and installed by `./tc002_setup.sh`; confirmed working on the device.

@@ -7,7 +7,7 @@
 #
 # Builds nshbox itself with a plain "make CROSS=" - dynamically linked
 # against this container's own libcrypto.so, deliberately NOT the static
-# link build/test_build_nshbox_x86.sh uses. That script's static link
+# link build/test_build_nshbox_native.sh uses. That script's static link
 # exists so its output binary can be copied out of its build container and
 # still run on an arbitrary host with no matching libcrypto installed; this
 # script's binary never leaves the container it was built in (build and
@@ -37,7 +37,7 @@ main()
   require_cmd make
 
   header "nshbox functional tests: building nshbox (native, dynamically linked)"
-  # Same output path build/test_build_nshbox_x86.sh's own local dev build
+  # Same output path build/test_build_nshbox_native.sh's own local dev build
   # can also use (nshbox/src/nshbox - see .gitignore) - fine to share,
   # since this always rebuilds it fresh right before running the tests
   # rather than trusting whatever might already be there.

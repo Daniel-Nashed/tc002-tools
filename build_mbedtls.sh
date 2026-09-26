@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# THE command to build just mbedTLS. Runs inside the build container - see
-# build/docker/run.sh, docs/build_platform.md.
+# THE command to build just mbedTLS (static libraries, for the musl toolchain).
+# Runs inside the Alpine ARM32 musl build container - see
+# build/docker-alpine-arm/README.md.
 #
-# Not a deliverable of its own - see curl/README.md and
-# build/build_mbedtls.sh. Exists as its own top-level script, like every
-# other build/build_*.sh here, mainly so it can be built and inspected on
-# its own without also running the whole curl build.
+# Not a deliverable of its own - nshbox's checksum commands and curl link it
+# statically (see build/build_mbedtls.sh, curl/README.md). Exists as its own
+# top-level script mainly so it can be built and inspected on its own.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-exec "${SCRIPT_DIR}/build/docker/run.sh" build/build_mbedtls.sh
+exec "${SCRIPT_DIR}/build/docker-alpine-arm/run.sh" build/build_mbedtls.sh

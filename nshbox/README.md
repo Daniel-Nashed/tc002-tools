@@ -8,12 +8,10 @@ Build path is independent of Dropbear's; see `build/build_nshbox.sh`, run via `.
 script (see [../docs/build_platform.md](../docs/build_platform.md) - never run it directly). Not a dependency of
 Dropbear, and Dropbear is not a dependency of it.
 
-The checksum commands (`sha256sum`, `sha1sum`, `sha384sum`, `sha512sum`, `md5sum`) link `nshbox` against OpenSSL's
-`libcrypto` - the only dependency beyond libc anywhere in this binary. They started out as a separate `sha256sum`
-tool, kept apart specifically so this dependency would not spread into `nshbox` before it was proven working; once
-it was, and since other future `nshbox` code may well need crypto/TLS too, it made more sense to carry one OpenSSL
-dependency here than two separate binaries each with their own. See "Why nshbox depends on OpenSSL" below - in
-particular, no SHA3 commands: confirmed on-device that they break the whole binary, not just themselves.
+The checksum commands (`sha256sum`, `sha1sum`, `sha384sum`, `sha512sum`, `md5sum`) use mbedTLS's low-level digest
+functions, linked **statically** - `nshbox` needs nothing on the device beyond libc. They used to link the device's
+`libcrypto.so.1.1`, which broke the whole binary once; see "Why the checksums use mbedTLS, not OpenSSL" below. They
+can also be left out of a build entirely (`make CHECKSUMS=0`, see "Build").
 
 ## Commands
 
@@ -35,8 +33,8 @@ particular, no SHA3 commands: confirmed on-device that they break the whole bina
 | `nshbox hexdump [file]` | no | Hex/ASCII dump, 16 bytes per line. |
 | `nshbox file [-bL] file ...` | no | Identify file type, with real ELF detail - see below. |
 | `nshbox stat [--json\|--JSON] <file> [...]` | no | Size, mode, owner, link count, mtime, via `lstat()` (or a JSON array, compact or pretty) - see below. |
-| `nshbox head [-n lines] [file ...]` | no | First N lines (default 10). |
-| `nshbox tail [-n lines] [file ...]` | no | Last N lines (default 10), fixed-size ring buffer. |
+| `nshbox head [-n N \| -N \| -c N] [-q \| -v] [file ...]` | no | First N lines (default 10) or bytes. GNU spellings: `-20`, `-n20`, `--lines=20`, `-c 100`, `--bytes=100`. With several files each gets a `==> name <==` header (`-q` off, `-v` always). `-` is stdin. |
+| `nshbox tail [-n [+]N \| -N \| -c [+]N] [-q \| -v] [file ...]` | no | Last N lines (default 10) or bytes, fixed-size ring buffer (`-c` is capped at 16 MiB); `-n +N` / `-c +N` start at line/byte N instead. Same options and headers as `head`. Not implemented: `-f`, size suffixes (`k`, `M`), `head -n -N`. |
 | `nshbox wc [-lwc] [file ...]` | no | Line/word/byte counts. |
 | `nshbox sort [-rnu] [file ...]` | no | Sort lines; `-r` reverse, `-n` numeric, `-u` unique. Multiple files are concatenated, not reported separately. |
 | `nshbox tee [-a] [file ...]` | **yes** | Copy stdin to stdout and to each named file (`-a` appends). |
@@ -308,8 +306,8 @@ What it does and doesn't do, by design:
 ## sleep and uptime
 
 Added after real, hit-in-practice gaps rather than speculatively: this device's `adb shell` environment is missing
-several commands a normal Linux shell takes for granted (`sha256sum`, `readlink` - see "Why nshbox depends on
-OpenSSL" below - and `sleep`, confirmed directly (2026-09-13) via `runtime/sshd.sh`'s own PID-file wait loop:
+several commands a normal Linux shell takes for granted (`sha256sum`, `readlink` - see "Why the checksums use mbedTLS, not OpenSSL"
+below - and `sleep`, confirmed directly (2026-09-13) via `runtime/sshd.sh`'s own PID-file wait loop:
 `sshd.sh[159]: sleep: not found`).
 
 `nshbox sleep SECONDS` supports fractional seconds via `nanosleep()` - a minimal, single-argument implementation,
@@ -425,7 +423,7 @@ nshbox file -L /data/some-symlink        # follow the symlink instead of describ
 A bounded, hand-written recognizer for the formats relevant on the TC002 - not a `libmagic` port, and deliberately
 not attempting the full Unix `file` database. No dependency beyond libc (avoiding `libmagic` is deliberate: this
 project already got burned once this session by a dynamic-library-version mismatch with the device - see "Why
-nshbox depends on OpenSSL" below - and no format-identification need here is worth risking that again). Recognizes:
+the checksums use mbedTLS, not OpenSSL" below - and no format-identification need here is worth risking that again). Recognizes:
 directories, symlinks (target shown, or followed with `-L`), device/fifo/socket files, empty files, ELF binaries
 (see below), `#!`-shebang scripts (interpreter path only, never executed - `nshbox file` only ever reads bytes, it
 never loads a library or runs the file it is inspecting), gzip and SquashFS by magic bytes, and a simple
@@ -475,15 +473,14 @@ accept a `PTR` type directly (`dig 10.2.0.192.in-addr.arpa PTR`) for a name you 
 `data` is the host name, so `--json` gives `{"name":"10.2.0.192.in-addr.arpa","ttl":...,"type":"PTR","data":"host.example.com"}`.
 An address with no `PTR` record fails like any other empty lookup: message on stderr, `[]` with `--json`, exit 1.
 
-Queries go through glibc's own stub resolver (`res_query()`, then `ns_initparse()`/`ns_parserr()` to walk the
+Queries go through the C library's own stub resolver (`res_query()`, then `ns_initparse()/ns_parserr()` to walk the
 answer section, `dn_expand()` to decode compressed domain names in `CNAME`/`MX` records) rather than a hand-rolled
 DNS client - unlike `tar`'s own from-scratch implementation elsewhere in this file, reimplementing the wire
 protocol here would mean getting `/etc/resolv.conf` parsing, search-domain handling, and UDP-to-TCP fallback for
-oversized replies all correct by hand, when glibc's resolver already does. This needs a `-lresolv` link addition
-(see `makefile`) - unlike `libcrypto` (an optional add-on package this project has already been careful about, see
-"Why nshbox depends on OpenSSL" below), `libresolv.so` is an unconditional part of any glibc userland, the same
-guarantee `libc.so.6` itself already carries, so this doesn't add the kind of deployment/version-matching risk
-`libcrypto` did.
+oversized replies all correct by hand, when the libc's resolver already does. With musl these functions are part of
+the statically linked libc (the `-lresolv` in the `makefile` is then an empty stub; it is needed by the glibc test
+build), so there is no device library to match - unlike the device's `libcrypto` (an optional add-on package, the
+source of the version problem described in "Why the checksums use mbedTLS, not OpenSSL" below).
 
 `TXT` records are shown as a single concatenated string even when the underlying reply splits them across several
 length-prefixed segments (RFC 1035 3.3.14 caps each segment at 255 bytes) - a single logical value like an SPF or
@@ -663,72 +660,83 @@ working equivalents (e.g. via BusyBox) and you want to keep using those instead,
 ## Build
 
 ```sh
-make -C nshbox/src CROSS=arm-linux-gnueabihf- clean all
+./build_nshbox.sh        # -> dist/nshbox
 ```
 
-or via the project build path, inside the build container:
+Runs in the Alpine ARM32 musl container ([../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md);
+the first run compiles the cross compiler, later runs use Docker's cache) and builds mbedTLS first if needed.
+`./build_all.sh` builds it too. The result is a **fully static** `arm-linux-musleabihf` executable (about 224 KB):
+no shared libraries at all, so it needs nothing from the device's rootfs - and the same file can be copied to
+`/tmp` on any device for debugging:
 
 ```sh
-./build_all.sh build/build_nshbox.sh
+adb push dist/nshbox /tmp/nshbox && adb shell chmod +x /tmp/nshbox
 ```
 
-Dynamically linked, and now needs `libcrypto.so.1.1` present on the device at runtime because of the checksum
-commands (see "Why nshbox depends on OpenSSL" below) - a static build is no longer just an `LDFLAGS = -static -s`
-toggle, since statically linking `libcrypto` hits the same size blowup described below. `grep` uses POSIX regex
-(`<regex.h>`) from the standard C library, so it adds no dependency beyond libc on its own.
+The makefile can also be run directly, e.g. `make -C nshbox/src CROSS=arm-linux-musleabihf-
+MBEDTLS_DIR=<prefix> STATIC=1` from inside that container. Its options:
 
-Building needs `libssl-dev` for the target architecture - already added to
-[../build/docker/Dockerfile](../build/docker/Dockerfile) and
-[../build/setup_build_platform.sh](../build/setup_build_platform.sh) alongside the packages Dropbear needs.
+- `STATIC=1` links everything statically (the build script always sets it).
+- `MBEDTLS_DIR=<prefix with include/ and lib/>` is where the checksum commands' mbedTLS comes from - the
+  `libmbedcrypto.a` that [../build/build_mbedtls.sh](../build/build_mbedtls.sh) builds. Left empty, the system's
+  `libmbedtls-dev` is used, which is what the Ubuntu test container has (a plain dynamic glibc build for the
+  functional test suite, `make CROSS=`). `nshbox.c` works with mbedTLS 3.x and 2.x.
+- `CHECKSUMS=0` (`-DNSHBOX_NO_CHECKSUMS`) leaves out `sha256sum`, `sha1sum`, `sha384sum`, `sha512sum` and
+  `md5sum`, so mbedTLS is not needed to build at all; `nshbox --version` then shows `(no checksum commands)`.
 
-## Local x86 test build (dev-only, NOT a deliverable)
+`grep` uses POSIX regex (`<regex.h>`) from the standard C library, so it adds no dependency beyond libc.
+
+Known issue: `hostname -f` did not work on the device with either the earlier glibc build or this musl one
+("Name does not resolve"); the cause is not found yet (it may just be the device's `/etc/hosts`). Plain `hostname`
+is fine.
+
+## Local native test build (dev-only, NOT a deliverable)
 
 ```sh
-./test_build_nshbox_x86.sh              # just build
-./test_build_nshbox_x86.sh top -l 5     # build, then run: dist/x86/nshbox top -l 5
+./test_build_nshbox_native.sh              # just build
+./test_build_nshbox_native.sh top -l 5     # build, then run: dist/amd64/nshbox top -l 5 (dist/arm64/ on an ARM box)
 ```
 
-(equivalent to `./build_all.sh build/test_build_nshbox_x86.sh`, which also still works, though it never runs anything -
-only the root wrapper does that, and it always runs the binary on the host, never inside the container, since the
+(the root wrapper builds in the container, then runs the binary on the host, never inside the container, since the
 whole point is testing against the host's own environment)
 
-Builds `nshbox` for the build container's own architecture (typically x86-64) instead of ARM, into `dist/x86/nshbox`
-- never `dist/nshbox`, so it can never be confused with, or accidentally deployed as, the real ARM binary. Reuses
-`nshbox/src/makefile` with an empty `CROSS=` (so `CC` becomes plain `gcc` instead of the ARM cross-compiler) rather
-than a separate makefile. Statically links `libcrypto` (unlike the real ARM build, which stays dynamic purely for
-size - see "Why nshbox depends on OpenSSL" below) precisely so it does *not* depend on whatever OpenSSL the build
-host or the eventual test host happens to have; confirmed necessary in practice, since a dynamically-linked version
-failed to start outside the container at all.
+Builds `nshbox` for the architecture the container runs on, in the native Alpine container (`build/docker-alpine`),
+into a directory named after the platform, like Docker/OCI platforms: `dist/amd64/nshbox` on a PC, `dist/arm64/nshbox`
+on an ARM box (`file dist/amd64/nshbox` shows the real architecture). The wrapper works out the host's platform with
+`uname -m` the same way and, when asked to run something, checks that a build for *this* platform exists; if the
+container built for another architecture (Docker emulating one) it says so and lists the platforms that were built,
+instead of failing with "cannot execute binary file". It never writes to
+`dist/nshbox`, so it can never be confused with, or accidentally deployed as, the real device binary. Reuses
+`nshbox/src/makefile` with an empty `CROSS=` (so `CC` becomes plain `gcc`) rather than a separate makefile. It is
+built the way the device binary is: fully static, on musl, with Alpine's own `mbedtls-static` for the checksum
+commands - so it has no shared-library dependency and runs on any Linux host of the same architecture.
 
 This exists purely so most of `nshbox`'s ~20 commands - anything that just reads `/proc` or plain files, which is
 most of them - can be exercised quickly on the build machine itself, without a full cross-build-and-adb-push cycle.
 It proves nothing about the TC002 itself, and commands like `iotest`/`vmstat`/`iostat`/`sysinfo` will report the
 build host's own numbers, not the device's.
 
-Deliberately kept separate from everything else in this project otherwise: not called from `build/build_all.sh`
+Deliberately kept separate from everything else in this project otherwise: not called from `build/build_all_musl.sh`
 (so it is never part of a plain `./build_all.sh`), no manifest, no artifact validation - it is scratch tooling for the
 person working on `nshbox`, not part of the pipeline that produces what actually ships to the device. The root
-`./test_build_nshbox_x86.sh` wrapper exists purely for convenience alongside the other root `./build-*.sh` scripts; unlike
-those, running it still only ever touches `dist/x86/`, never `dist/nshbox`.
+`./test_build_nshbox_native.sh` wrapper exists purely for convenience alongside the other root `./build-*.sh` scripts; unlike
+those, running it still only ever touches `dist/<platform>/`, never `dist/nshbox`.
 
-## Why nshbox depends on OpenSSL
+## Why the checksums use mbedTLS, not OpenSSL
 
-The checksum commands were first built and proven as a separate `sha256sum` tool, kept apart from `nshbox`
-specifically so this dependency would not need to be assumed until it was working. Statically linking `libcrypto`
-was tried first there and pulled in well over 1MB: OpenSSL registers all its algorithms, ciphers, and error strings
-through global function-pointer tables, so even though only `EVP_sha256()` was called, the linker could not prove
-the rest of `libcrypto.a` was unreachable and linked most of it in anyway. Dynamic linking avoided that, at the cost
-of needing `libcrypto.so.1.1` present on the device at runtime - `build/build_nshbox.sh` checks this directly
-(`readelf -d` must show a `libcrypto` entry) rather than trusting the linker flags were applied correctly.
+The checksum commands started out on OpenSSL's `libcrypto` (EVP interface), and this section is why they no longer
+do. That history is kept because it explains the constraints.
 
-Once that tradeoff was proven working, the checksum code was folded into `nshbox` rather than kept as a separate
-binary: `nshbox` was already going to need OpenSSL-linked code again for future commands, and carrying one
-`libcrypto` dependency here is simpler than maintaining it twice.
+The checksum commands were first built and proven as a separate `sha256sum` tool. Statically linking `libcrypto`
+there pulled in well over 1MB: OpenSSL registers all its algorithms, ciphers, and error strings through global
+function-pointer tables, so even though only `EVP_sha256()` was called, the linker could not prove the rest of
+`libcrypto.a` was unreachable and linked most of it in anyway. So it was linked dynamically instead, at the cost of
+needing `libcrypto.so.1.1` on the device at runtime, and later folded into `nshbox`.
 
 **Confirmed on real hardware: `/lib/libcrypto.so.1.1` is present on the TC002, but it predates OpenSSL 1.1.1.**
-Unlike the earlier separate-binary design, a problem here affects the whole `nshbox` tool, not just one checksum
-command - and that happened for real. Adding `sha3-224sum`/`sha3-256sum`/`sha3-384sum`/`sha3-512sum` (via
-`EVP_sha3_*()`, added to OpenSSL in 1.1.1) made `nshbox` fail with:
+That made the dependency a risk for the whole `nshbox` tool, not just one checksum command - and it happened for
+real. Adding `sha3-224sum`/`sha3-256sum`/`sha3-384sum`/`sha3-512sum` (via `EVP_sha3_*()`, added to OpenSSL in
+1.1.1) made `nshbox` fail with:
 
 ```
 ./nshbox: /lib/libcrypto.so.1.1: version `OPENSSL_1_1_1' not found (required by ./nshbox)
@@ -737,13 +745,18 @@ command - and that happened for real. Adding `sha3-224sum`/`sha3-256sum`/`sha3-3
 Not a missing-library error - the library is there - but a missing *symbol version*. The dynamic linker checks
 every versioned symbol a binary requires against what the loaded library actually provides, for the whole binary,
 before `main()` runs at all. So a single OpenSSL 1.1.1-only function reachable anywhere in `nshbox` blocked every
-command - `info`, `ps`, `netstat`, all of it - not just the SHA3 four. The SHA3 commands were removed as a result;
-every checksum command that remains (`sha256sum`, `sha1sum`, `sha384sum`, `sha512sum`, `md5sum`) uses OpenSSL
-1.1.0-or-earlier API, which the device's library does have.
+command - `info`, `ps`, `netstat`, all of it - not just the SHA3 four. The SHA3 commands were removed as a result.
 
-`build/build_nshbox.sh` now checks this automatically after every build: it inspects the cross-compiled binary's
-`.gnu.version_r` section (`readelf -V`) and fails the build if any required OpenSSL symbol version is newer than
-`OPENSSL_1_1_0`, instead of waiting to find out on the device again.
+**Now:** the five remaining checksum commands use mbedTLS's low-level `mbedtls_md5_*`/`sha1_*`/`sha256_*`/
+`sha512_*` functions (SHA-384 is the SHA-512 code with a flag), linked statically from `libmbedcrypto.a`. The
+low-level API is used on purpose rather than the generic `mbedtls_md` interface, which would pull in every enabled
+digest. Nothing crypto-related is loaded from the device any more, so this whole class of problem is gone. It is the
+same pinned mbedTLS build curl uses ([../build/build_mbedtls.sh](../build/build_mbedtls.sh)), Apache-2.0 licensed
+(see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)).
+
+`build/build_nshbox.sh` checks that no `libcrypto`/`libssl`/`libmbed*` entry is in the binary's dynamic section
+(`readelf -d`). It used to check instead that no OpenSSL symbol version newer than `OPENSSL_1_1_0` was required
+(`readelf -V`); that check is gone with the dependency.
 
 ## Status
 
@@ -753,14 +766,14 @@ Phase 13):
 - `nshbox --version` (or `-v`) prints just the version number and exits, useful for confirming which build is
   actually installed/running on a device rather than assuming a redeploy took effect. `nshbox --help` is still
   **not implemented** - only bare `nshbox` (no args) prints full usage (which also includes the version).
-- Cross-builds cleanly via `./build_nshbox.sh`: `dist/nshbox` is confirmed ARM 32-bit hard-float (`ELF 32-bit LSB
-  pie executable, ARM, EABI5 ... dynamically linked, interpreter /lib/ld-linux-armhf.so.3`), matching the verified
-  target ABI (see [../docs/platform.md](../docs/platform.md)), and stripped. Compiles with no warnings under
-  `-Wall -Wextra` either natively or cross-compiled.
-- Confirmed running on the actual TC002 device for the checksum commands - see "Why nshbox depends on OpenSSL"
-  above for the real SHA3/`OPENSSL_1_1_1` failure this surfaced and how it was fixed (SHA3 removed, a build-time
-  OpenSSL symbol-version check added). The rest of `nshbox` shares the same binary and the same fix, but has not
-  been separately exercised command-by-command on-device yet.
+- Cross-builds via `./build_nshbox.sh` (Alpine musl container) as a fully static ARM 32-bit hard-float executable
+  (`ELF 32-bit LSB executable, ARM, EABI5 ... statically linked`), matching the verified target ABI (see
+  [../docs/platform.md](../docs/platform.md)), and stripped; `./verify.sh` checks this. It was earlier a dynamic glibc
+  build. Confirmed running on the device (2026-09-25) for `nslookup`, `dig -x`, `hostname` and the DNS lookups; the
+  other commands have not been re-checked on the device since the switch to musl.
+- The checksum commands were confirmed on the actual TC002 while they used OpenSSL - see "Why the checksums use
+  mbedTLS, not OpenSSL" above for the SHA3/`OPENSSL_1_1_1` failure that surfaced. The mbedTLS-based version has been
+  checked by the host-side test suite only, **not yet on the device**.
 - `du`'s directory recursion has no depth limit - an extremely deeply nested directory tree could exhaust the
   stack. Not expected to matter for normal device inspection use, but not guarded against either. `find` has the
   same unbounded-recursion property when `-maxdepth` is not given (unlike `du`, `find` at least has that escape

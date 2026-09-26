@@ -56,7 +56,7 @@ void assert_true(bool condition, const std::string &context, const char *file, i
 
 // Set once by main() from argv[1] - the nshbox binary under test. Every
 // test file reads nshbox_path() rather than constructing its own guess
-// at where dist/x86/nshbox lives.
+// at where dist/<platform>/nshbox lives.
 void set_nshbox_path(const std::string &path);
 const std::string &nshbox_path();
 

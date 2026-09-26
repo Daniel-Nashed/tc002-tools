@@ -158,7 +158,7 @@ json_field()
   local field="$1"
   local json="$2"
 
-  echo "$json" | grep -o "\"${field}\":\"[^\"]*\"" | head -n1 | cut -d'"' -f4
+  echo "$json" | grep -o "\"${field}\":\"[^\"]*\"" | sed -n '1p' | cut -d'"' -f4
 }
 
 # Splits a --all --json array of flat objects into one object per output

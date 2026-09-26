@@ -66,7 +66,7 @@ Two real, on-device failures in a row changed that call:
    get right and keep right.
 2. Even with that solved, an actual on-device run of the dynamically-linked `openssl` CLI failed outright:
    `error while loading shared libraries: libatomic.so.1: cannot open shared object file`. This project's build
-   container's `arm-linux-gnueabihf-gcc` links a dynamic `libatomic` that a WSL-based cross-toolchain used earlier
+   container's earlier glibc cross compiler linked a dynamic `libatomic` that a WSL-based cross-toolchain used earlier
    to verify the rest of this build did not even need - a real toolchain-version difference, and the device's own
    userland has no confirmed `libatomic.so.1` at all.
 
@@ -187,24 +187,27 @@ read from `--help`):
   one matters more than a minimalism choice here - see "4.0.2 - a pin that bounced..." above for why ENGINE is
   genuinely non-functional in this OpenSSL version regardless.
 
-Verified end to end with a real ARM cross-compile (2026-09-12, via a WSL cross-toolchain as a stand-in for the
-project's own Docker container - see Status below): `Configure` succeeds, `make` produces real ARM static archives
-and a real ARM `openssl` binary depending on nothing but `libc.so.6`/`ld-linux-armhf.so.3` (`file`/`readelf`
-confirmed), and `make DESTDIR=... install_sw install_ssldirs` produces exactly the `sdk/` layout described above.
+Verified end to end: `Configure` succeeds, `make` produces real ARM static archives and a real ARM `openssl` binary with
+no NEEDED entries (`file`/`readelf` confirmed), and `make DESTDIR=... install_sw install_ssldirs` produces exactly the
+`sdk/` layout described above.
 
-## Deployment: partially solved
+## Deployment
 
-The CA bundle is deployed independently of this build entirely now: `build/build_ca_bundle.sh` packages it (its own
-build step, not part of `build_openssl.sh` - see above), and `install/install_etc.sh`'s `push_ca_bundle()` stages
-`ca-certificates.crt` at `/data/etc-overrides/ssl/certs/ca-certificates.crt` unconditionally, independent of
-whether `curl`/`nginx`/this OpenSSL CLI have themselves been built or installed yet - see
+The CA bundle is deployed independently of this build entirely: `build/build_ca_bundle.sh` packages it (its own build
+step, not part of `build_openssl.sh` - see above), and `install/install_etc.sh`'s `push_ca_bundle()` stages
+`ca-certificates.crt` at `/data/etc-overrides/ssl/certs/ca-certificates.crt` unconditionally - see
 [../docs/device_layout.md](../docs/device_layout.md#trusted-root-ca-bundle).
 
-`device/data/bin/openssl` (the CLI tool itself) is not pushed anywhere yet - real, tracked follow-up work, the same
-"build first, install as a separate later step" gate every other component here went through. Deploying it to
-`/data/bin/openssl` (matching where `curl` and every other CLI deliverable here already lives - see
-[../docs/device_layout.md](../docs/device_layout.md)) is the natural next step once nginx itself has an install
-path.
+The `openssl` CLI is **not** in the default on-device pack: at about 3.2 MB it is too big for a device with roughly 36 MB
+of RAM and 8 MiB of flash, and nginx and curl do not need it. Build it with `--with-openssl` and add it with
+`install/install_on_demand.sh --with-openssl` (or `TC002_INSTALL_OPENSSL_CLI=1`) if you want it; certificates for
+testing are made on the host instead (see [../tests/nginx/README.md](../tests/nginx/README.md)).
+
+## Now built with musl, and size-trimmed
+
+OpenSSL is built by the static musl toolchain now (Alpine ARM32 container, see [../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)); the sections above about `libatomic`, `CNF_EX_LIBS` and `-rpath` describe the earlier dynamic glibc build, whose workarounds are no longer needed. Differences: `no-async` (musl has no `makecontext`), `no-tests`, `no-module` and `no-legacy` (OpenSSL 4 builds `providers/legacy.so` even with `no-shared`, and a static libc cannot go into a shared object), and a plain `-static` link of the CLI instead of the `-latomic` workaround.
+
+The first musl nginx and CLI were 3.44 MB / 3.95 MB - the same as the old dynamic-glibc build (3.3M), and all of it OpenSSL, because a static OpenSSL cannot drop unused algorithms the way a linker drops unused functions (its provider tables reference nearly all of them). So whole families are not compiled in: DTLS, SCTP, QUIC, SRP, PSK, ssl-trace, TLS compression, CMS, CT, TS, CMP, **OCSP** (no stapling wanted), the old ciphers/digests (IDEA, SEED, RC2/4/5, Blowfish, CAST, MD2, MDC2, Whirlpool), SM2/3/4, Camellia, ARIA, binary-field curves, weak SSL ciphers, and TLS 1.0/1.1. TLS 1.2/1.3, AES-GCM/CCM, ChaCha20-Poly1305, RSA, ECDSA/ECDH, DH, SHA-1/2/3, MD5, X.509 and PEM stay. The script checks each name against this version's `Configure` first and skips (and logs) any it does not know, since Configure aborts on an unknown option. Measured size after trimming: see `cli_size_bytes` in `dist/openssl/manifest-openssl.json`.
 
 ## Build
 
@@ -226,16 +229,7 @@ build.
 
 ## Status
 
-This exact combination - 4.0.2, `no-shared`, `no-engine`, the `CNF_EX_LIBS` libatomic fix, the atomic sdk/device
-swap-in - was first cross-compiled cleanly in an independent WSL environment (2026-09-13), with its static archives
-verified via `nm` to contain everything nginx needs (`SSL_get1_peer_certificate`, `EVP_CIPHER_get_iv_length`
-present; `ENGINE_by_id` correctly absent). It has since been confirmed for real, in this project's own Docker
-container: `build_openssl.sh` followed by `build_nginx.sh` (now pinned to 1.31.5 - see
-[nginx/README.md](../nginx/README.md)) both completed successfully, producing a real stripped ARM `nginx` binary
-(3,463,264 bytes) with `"tls": "openssl-static"` in its manifest and no dynamic OpenSSL/PCRE/zlib/libatomic
-dependency - `verify_artifact()` would have failed the build otherwise. The 3.5.8 LTS pin this project used in
-between remains the more thoroughly proven combination overall, since it was additionally confirmed with a real
-on-device TLS 1.3 handshake (2026-09-13) - see [nginx/README.md](../nginx/README.md) for that result. The same
-live-handshake test has not yet been explicitly re-run at this 4.0.2/1.31.5 pin; the build and link are confirmed,
-the on-device TLS behavior is presumed identical (same OpenSSL code paths, same static-linking approach) but not
-yet independently re-verified.
+Built with the static musl toolchain in this project's own Alpine container, and the resulting nginx is verified on the
+real device (TLS 1.2 and 1.3, RSA and ECDSA certificates - see [../tests/nginx/README.md](../tests/nginx/README.md)).
+The `openssl` CLI (about 3.2 MB) builds and is checked to be fully static, but is an opt-in extra and has only been
+run on the device by pushing it by hand.

@@ -17,9 +17,12 @@ checked into this repository - it is downloaded and checksum-verified at build t
 Both the patch and the fallback file are verified end-to-end against the real, pinned tarball: applied cleanly, and
 confirmed with both a native (x86_64) build and a real ARMHF cross-build via `build/build_dropbear.sh` (in the
 container). `dbutil.o` compiles warning-free, `__wrap_getpwnam`/`__wrap_getpwuid` land in the final `dropbear`
-binary, and the cross-built artifacts are confirmed ARM 32-bit hard-float, dynamically linked, and stripped. Not
-yet run on the actual TC002 device - see [../docs/architecture.md](../docs/architecture.md) for what is and is not
-verified there.
+binary, and the cross-built artifacts are confirmed ARM 32-bit hard-float and stripped. **Built fully static with
+musl** (Alpine ARM32 container, static zlib from its sysroot):
+`./build_dropbear.sh`, see [../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md), and as ONE
+multi-call binary, `dist/dropbearmulti` (Dropbear's own `MULTI=1` mode; see `docs/dropbear.md`, "Build outputs") - not yet
+run on the device in that form. The earlier dynamic build was run on the actual TC002 device - see
+[../docs/architecture.md](../docs/architecture.md) for what is and is not verified there.
 
 Upgrading the pinned Dropbear version requires re-verifying this patch against the new tarball (context lines may have
 shifted) and re-verifying `build/build_dropbear.sh`'s `DROPBEAR_SHA256` against the new release.

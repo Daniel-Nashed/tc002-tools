@@ -21,7 +21,7 @@ betting on TLS library compatibility in the same step, followed this project's "
 adding the risky thing" approach. TLS is the tracked next step that was always intended, now added.
 
 `build/build_curl.sh` now builds with `--with-mbedtls=<path>`, pointing at [build_mbedtls.sh](../build/build_mbedtls.sh)'s
-own output - see that script for why mbedTLS is vendored and cross-built here rather than using Debian's own
+own output - see that script for why mbedTLS is vendored and cross-built here rather than using a distribution's own
 `libmbedtls-dev:armhf` package (short version: it is the 2.16.x line from ~2019, likely with known CVEs patched
 upstream since; this project instead pins a *current* mbedTLS release, same "minimal, current" bar already set for
 [nginx](../nginx/README.md)). curl links against mbedTLS's static archives only - `build_mbedtls.sh` never builds a
@@ -31,49 +31,40 @@ wrong, unlike zlib below.
 `build_curl.sh` depends on `build_mbedtls.sh` having already run - the top-level `./build_curl.sh` wrapper runs it
 first automatically.
 
-## Also disabled, and why
+## Optional libraries: all off
 
-Curl's `configure` auto-links whichever *optional* feature libraries happen to be present on the build host -
-confirmed directly by an actual native build (2026-09-12) picking up `nghttp2` (HTTP/2), `libidn2` (IDN), `libldap`
-(LDAP), `libpsl` (the public suffix list), `zstd`, and `brotli`, none of which this project's build container has as
-cross-compiled `:armhf` packages (only `zlib1g-dev:armhf` does). Rather than rely on "the container happens not to
-have them" to produce the right result by accident, `build/build_curl.sh` explicitly passes `--disable-ldap
---disable-ldaps --without-brotli --without-zstd --without-libpsl --without-libidn2 --without-nghttp2` - confirmed
-by that same native build to bring the dependency footprint down to exactly `libz.so.1` and `libc.so.6`.
+Curl's `configure` auto-links whichever *optional* feature libraries it finds on the build host (`nghttp2`, `libidn2`,
+`libldap`, `libpsl`, `zstd`, `brotli`). Rather than rely on "the container happens not to have them",
+`build/build_curl.sh` explicitly passes `--disable-ldap --disable-ldaps --without-brotli --without-zstd
+--without-libpsl --without-libidn2 --without-nghttp2`.
 
-## zlib: kept, but statically linked
+## zlib: kept, statically linked
 
-`--with-zlib` is enabled - dropping automatic gzip/deflate response decoding for no reason would make curl less
-useful as a diagnostic tool, and this project's build container already has `zlib1g-dev:armhf` cross-installed
-(originally for `ncdu`'s build prerequisites). But the link is forced *static*, not dynamic: a real on-device run
-of an earlier, dynamically-linked build (2026-09-12) printed `libz.so.1: no version information available
-(required by ./curl)` - the device's own `libz.so.1` does not carry the same GNU symbol-versioning metadata this
-project's cross-built one does. Not fatal (curl still ran), but the same class of build-time-vs-device library
-mismatch that already caused a real bug in `nshbox` (`OPENSSL_1_1_1`) and led `ncdu` to statically link
-`ncursesw`/`tinfo` instead of trusting the device's own copy - so curl follows the same fix here rather than
-leaving it to chance.
+`--with-zlib` is enabled - dropping automatic gzip/deflate response decoding would make curl less useful as a
+diagnostic tool. zlib is Alpine's static armv7 `zlib-static` from the ARM sysroot, and the whole binary is static, so
+nothing is taken from the device. (An earlier dynamic build printed `libz.so.1: no version information available` on
+the device, which is the class of build-time-versus-device library mismatch that led to the static design; see
+[../docs/musl_migration.md](../docs/musl_migration.md).)
 
-`ncdu`'s own static-link technique (`make LIBS="-Wl,-Bstatic -lncursesw ... -Wl,-Bdynamic"`) does not carry over
-directly: curl's final binary links through libtool, and a real build (2026-09-12) proved libtool parses any bare
-`-lNAME` flag itself (to reorder libraries per its own per-platform rules) and physically relocates it - the real
-`libtool: link:` line showed our `-lz` discarded from between the `-Wl,-Bstatic`/`-Wl,-Bdynamic` pair entirely,
-replaced by libtool's own `-lz` (sourced from `lib/libcurl.la`'s recorded `dependency_libs`) landing back in the
-still-dynamic trailing section. The fix that survives this: `build/build_curl.sh` builds `lib/` first, patches
-`lib/libcurl.la`'s own `dependency_libs` to reference zlib's static archive *by path* instead of `-lz` (a literal
-path is not subject to libtool's `-lNAME` reordering), then builds the rest - so libtool itself propagates the
-static reference to the final `curl` binary's link line.
+## One binary, not a libtool wrapper
 
-## A real trap this caught before it shipped
+Curl's default build produces both a static and a shared `libcurl` and links the `curl` CLI against the shared one, so
+`src/curl` is a libtool wrapper *shell script* around a real ELF that needs `libcurl.so.4`. Neither can be deployed as
+is. `--disable-shared` (plus `curl_LDFLAGS=-all-static`) forces a single self-contained binary, and
+`build/build_curl.sh` checks `file` output for `ELF` before trusting anything else about the result.
 
-Curl's default build produces **both** a static and a shared `libcurl`, and links the `curl` CLI against the shared
-one. That means the default `src/curl` is not even a real binary - it is a libtool wrapper *shell script* that sets
-`LD_LIBRARY_PATH` to find the actual ELF at `src/.libs/curl`, which itself then needs `libcurl.so.4` installed on
-whatever machine runs it. Deploying either of those to the device as-is would have failed outright (the wrapper
-script does not survive being copied out of the build tree; the real binary would fail with a missing-shared-library
-error, since nothing here builds or ships `libcurl.so.4` separately). Caught by actually building it, not by reading
-the flag list - confirmed with `file`/`readelf` before assuming `src/curl` was deployable. Fixed with
-`--disable-shared`, which forces a single self-contained binary. `build/build_curl.sh`'s own verification step
-checks `file` output for `ELF` before trusting anything else about the binary, specifically because of this.
+## The /dev/random trap (why curl hung on the device)
+
+mbedTLS reads random bytes from `/dev/random` when it cannot use `getrandom()` - and it only uses `getrandom()` with
+glibc, so on musl it is always `/dev/random` (`MBEDTLS_PLATFORM_DEV_RANDOM`, whose default in `platform.h` is
+`"/dev/random"`). On the TC002 (kernel 4.9) `/dev/random` is the blocking pool, curl seeds its random generator with
+2 x 128 bytes at startup, and the device only has about 60 bits of entropy credited (`/proc/sys/kernel/random/entropy_avail`)
+- so every curl start, even `curl --version`, waited forever. Found with `qemu-arm -strace curl --version` on the build
+host (`open("/dev/random")` followed by a 128-byte `readv`, twice; it returns at once there, where the host has plenty
+of entropy). `build/build_mbedtls.sh` now sets `MBEDTLS_PLATFORM_DEV_RANDOM` to `"/dev/urandom"` (which never blocks
+and, once the kernel's generator is initialised - it is, `getrandom()` works on this device - is as good) and checks
+after the build that `libmbedcrypto.a` contains no `/dev/random`. Anything linking this mbedTLS is affected the same
+way; nshbox only uses its hash functions, which need no randomness.
 
 ## Build
 
@@ -81,16 +72,17 @@ checks `file` output for `ELF` before trusting anything else about the binary, s
 ./build_curl.sh
 ```
 
-Builds mbedTLS first (see above), then runs inside the build container like every other `build/` script - see
-[../docs/build_platform.md](../docs/build_platform.md). Downloads and checksum-verifies the pinned release tarball,
-cross-compiles with the flags described above, verifies the result is a real ELF binary with mbedTLS and zlib both
-statically linked and no unexpected dynamic dependency, strips it, and writes `dist/curl` plus
-`dist/manifest-curl.json`.
+Built fully static with the musl toolchain (Alpine ARM32 container, see
+[../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)). Builds mbedTLS first if needed, then downloads and checksum-verifies the pinned
+release tarball and cross-compiles `./configure --with-mbedtls=... --with-zlib=<sysroot>/usr --disable-shared
+--enable-static` and `make curl_LDFLAGS=-all-static` (libtool swallows a plain `-static`; `-all-static` is what
+reaches the compiler). zlib is Alpine's static armv7 `zlib-static` from the image's sysroot; with only static
+libraries and `-all-static` there is nothing to steer. The script checks that configure enabled mbedTLS and
+zlib (`HAVE_LIBZ`), that the result is a real ELF with no NEEDED entry and no program interpreter, strips it, and
+writes `dist/curl` plus `dist/manifest-curl.json`. Opt-in for `./build_all.sh` (`--with-curl` or `--all`). Size: on top of the `-Os` / `--gc-sections` flags every musl component gets, protocols and features nothing on the device is expected to use are disabled at configure time (decided protocol by protocol): IPFS, DICT, GOPHER, RTSP, SMB, TELNET, TFTP (and LDAP/LDAPS), plus DoH, NTLM, Kerberos, Negotiate, AWS SigV4, HTTP message signatures and `--libcurl`. HTTP(S), FTP(S), file, proxy, POP3, IMAP, SMTP (kept for testing mail) and MQTT (`mqtt://`, and this version also lists `mqtts://` - MQTT over TLS - in `curl --version`; kept for pushing values) stay, and the build refuses to finish if configure's protocol list lacks any of them. The result is about 1.15 MB (the first static build, before the trimming, was 1,329,728 bytes).
 
 ## Status
 
-Configure flags and the shared-library trap above were first confirmed against a real *native* (x86_64) build of
-the pinned version. The real `arm-linux-gnueabihf` cross-build has since been run for real, in the actual build
-container, and the resulting (then TLS-less, dynamically-linked-zlib) binary has been run on-device - which is
-exactly what surfaced the zlib symbol-versioning mismatch described above (2026-09-12). The static-zlib fix and the
-newly-added mbedTLS support have not been tested on-device yet.
+Built and run on the device (2026-09-25/26): `curl --version` and HTTPS through mbedTLS work after the
+`/dev/random` fix above. The mail (POP3/SMTP/IMAP) and MQTT paths are compiled in and listed by `curl --version` but
+have not been exercised against a real server on the device yet.

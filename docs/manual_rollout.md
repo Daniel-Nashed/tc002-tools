@@ -10,8 +10,8 @@ shell`) without re-pushing anything, see "After a reboot" below.
 - The device is reachable over `adb` - either network ADB (just its IP, `adb tcpip` already enabled on the device) or
   USB with `adb devices` listing it. This, and everything below, runs on your host - not in the build container (see
   the next point).
-- You have built `dropbear`, `scp`, `dropbearkey`, `dbclient`, and `dropbearconvert`: `./build_all.sh
-  build/build_dropbear.sh` (or plain `./build_all.sh` for everything) - see [build_platform.md](build_platform.md) and
+- You have built Dropbear - one multi-call binary, `dist/dropbearmulti`, that is `dropbear`, `scp`, `dropbearkey`,
+  `dbclient` and `dropbearconvert` in one file: `./build_dropbear.sh` (or plain `./build_all.sh` for everything) - see [build_platform.md](build_platform.md) and
   [dropbear.md](dropbear.md).
 - You have an SSH public key file you intend to authorize (not the private key) - or let
   `resolve_authorized_key()` fall back to `$HOME/.ssh/id_ed25519.pub` (asking first), or generate one, if you don't
@@ -121,9 +121,10 @@ behind installing Dropbear specifically.
 install/install_dropbear.sh
 ```
 
-Pushes `dropbear`, `scp`, `dropbearkey`, `dbclient` (for outgoing connections *from* the device),
-`dropbearconvert` (key-format conversion - see [dropbear.md](dropbear.md) and
-[device_layout.md](device_layout.md#dbclient-and-dropbearconvert)), `init.sh` and `sshd.sh` (the on-device scripts,
+Pushes the one multi-call binary `dropbearmulti` and creates the symlinks `dropbear`, `scp`, `dropbearkey`, `dbclient`
+(for outgoing connections *from* the device) and `dropbearconvert` (key-format conversion - see
+[dropbear.md](dropbear.md) and [device_layout.md](device_layout.md#dbclient-and-dropbearconvert)) pointing at it (each
+program runs according to the name it is started as; `init.sh` recreates any missing link at boot), plus `init.sh` and `sshd.sh` (the on-device scripts,
 see step 6) to `/data/bin`, and installs your authorized key to `/data/home/.ssh/authorized_keys`. Does not lay out
 `/etc` (step 3, above, already did), generate the host key, or start Dropbear - `init.sh` (which hands off to
 `sshd.sh`) does the latter two, on-device, the first time you run it.

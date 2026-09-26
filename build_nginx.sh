@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
 # THE command to build just nginx. Runs inside the build container - see
-# build/docker/run.sh, docs/build_platform.md.
+# build/docker-alpine-arm/README.md (static musl toolchain).
 #
-# Unlike every other build_*.sh wrapper in this directory, this one does
-# an extra step first: nginx's own configure script compiles AND EXECUTES
-# small arm-linux-gnueabihf test programs even in --crossbuild mode
-# (confirmed directly in nginx's own auto/feature, auto/cc/name, and
-# several auto/types/* scripts, 2026-09-12 - "--crossbuild" only skips
-# nginx's OS auto-detection step, not these). Executing an ARM binary on
-# this x86_64 build host needs QEMU user-mode emulation registered with
-# the kernel's binfmt_misc, done by build/docker/register_qemu_arm.sh
-# (shared with the root ./build_all.sh, which needs the exact same
-# registration whenever it builds nginx too - see that script's own
-# comments for the full explanation and why patching nginx's own build
-# scripts instead was rejected).
+# nginx's own configure script compiles AND EXECUTES small ARM test programs
+# even in --crossbuild mode. build/build_nginx.sh handles that inside the
+# container with a compiler wrapper that runs them under qemu-arm
+# (build/qemu-cc-wrapper.sh) - nothing has to be registered with the host
+# kernel any more, so this wrapper needs no extra step first.
 #
 # Accepts --without-tls (forwarded to build/build_nginx.sh - see its own
 # --help), which also skips the OpenSSL prerequisite check below entirely,
@@ -53,6 +46,4 @@ if [ "$WITH_TLS" -eq 1 ] \
   exit 1
 fi
 
-"${SCRIPT_DIR}/build/docker/register_qemu_arm.sh"
-
-exec "${SCRIPT_DIR}/build/docker/run.sh" build/build_nginx.sh "${NGINX_ARGS[@]}"
+exec "${SCRIPT_DIR}/build/docker-alpine-arm/run.sh" build/build_nginx.sh "${NGINX_ARGS[@]}"

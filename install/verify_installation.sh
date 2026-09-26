@@ -24,7 +24,7 @@ FAILED=0
 usage()
 {
   cat <<'EOF'
-Usage: verify_installation.sh [--device SERIAL] [--config FILE]
+Usage: verify_installation.sh [--device SERIAL] [--config FILE] [--with-openssl]
 
 Checks that dropbear/scp/dropbearkey/dbclient/dropbearconvert/init.sh/
 sshd.sh/setup_etc.sh/nshbox/kilo/gzip/ncdu on the device match the
@@ -33,8 +33,8 @@ the CA bundle (if built) matches under etc-overrides, that
 authorized_keys, the host key, and one ncdu terminfo entry are present
 with sane listings, and (if dist/on-demand.tar.gz was built) that the
 compressed-on-demand archive/wrapper match and every bundled tool
-(curl/nginx/openssl) is a symlink to the wrapper on-device. Exits
-non-zero if anything fails.
+(curl/nginx/7zz, and openssl with --with-openssl) is a symlink to the wrapper
+on-device. Exits non-zero if anything fails.
 
   --device SERIAL   ADB device serial (overrides DEVICE from config).
   --config FILE     Config file (default: config/tc002-tools.conf).
@@ -52,6 +52,10 @@ do
     --config)
       CONFIG_FILE="$2"
       shift 2
+      ;;
+    --with-openssl)
+      export TC002_INSTALL_OPENSSL_CLI=1
+      shift
       ;;
     -h|--help)
       usage
@@ -202,16 +206,41 @@ verify_present()
   fi
 }
 
+# The device has only about 36 MB of RAM, and /tmp is RAM: report what is free
+# (nshbox's free = the raw /proc/meminfo, "MemAvailable:" line, in kB) and warn when it is low. Only ever
+# an INFO/WARN line, never a failure - it says nothing about the install itself,
+# but a low number explains odd behaviour later (a closed adb shell, a tool that
+# will not start; see docs/device_layout.md's "RAM budget").
+report_memory()
+{
+  local out avail_kb
+
+  out="$(adb -s "$DEVICE" shell "${INSTALL_PREFIX}/bin/free" 2>/dev/null | tr -d '\r' || true)"
+  avail_kb="$(echo "$out" | sed -n 's/^MemAvailable:[[:space:]]*\([0-9][0-9]*\) kB.*/\1/p' | sed -n '1p')"
+
+  if [ -z "$avail_kb" ]; then
+    log "INFO: could not read the device's free memory"
+    return
+  fi
+
+  if [ "$avail_kb" -lt 12288 ]; then
+    log "WARN: only $avail_kb kB of RAM available on the device (under 12 MB) - anything unpacked into /tmp competes with it; see docs/device_layout.md's RAM budget"
+  else
+    log "INFO: $avail_kb kB of RAM available on the device"
+  fi
+}
+
 main()
 {
   require_cmd adb
   require_cmd sha256sum
 
-  verify_binary dropbear
-  verify_binary scp
-  verify_binary dropbearkey
-  verify_binary dbclient
-  verify_binary dropbearconvert
+  verify_binary dropbearmulti
+  verify_symlink dropbear "${INSTALL_PREFIX}/bin/dropbear" dropbearmulti
+  verify_symlink scp "${INSTALL_PREFIX}/bin/scp" dropbearmulti
+  verify_symlink dropbearkey "${INSTALL_PREFIX}/bin/dropbearkey" dropbearmulti
+  verify_symlink dbclient "${INSTALL_PREFIX}/bin/dbclient" dropbearmulti
+  verify_symlink dropbearconvert "${INSTALL_PREFIX}/bin/dropbearconvert" dropbearmulti
   verify_binary init.sh "${REPO_ROOT}/runtime/init.sh"
   verify_binary sshd.sh "${REPO_ROOT}/runtime/sshd.sh"
   verify_binary setup_etc.sh "${REPO_ROOT}/runtime/setup_etc.sh"
@@ -227,6 +256,8 @@ main()
   verify_present "authorized_keys" "${INSTALL_PREFIX}/home/.ssh/authorized_keys" 1
   verify_present "dropbear host key" "${INSTALL_PREFIX}/home/dropbear_ed25519_host_key" 0
   verify_present "ncdu terminfo (xterm-256color)" "${INSTALL_PREFIX}/share/terminfo/x/xterm-256color" 0
+
+  report_memory
 
   if [ "$FAILED" -eq 1 ]; then
     die "one or more verification checks failed"

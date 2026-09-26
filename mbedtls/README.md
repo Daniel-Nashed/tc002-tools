@@ -11,13 +11,13 @@ license (dual Apache-2.0 / GPL-2.0-or-later; this project takes the Apache-2.0 o
 this repository; `build/build_mbedtls.sh` downloads the pinned release tarball fresh at build time, the same way
 every other `build/` script here handles its upstream source.
 
-## Why vendor and cross-build this instead of using Debian's own package
+## Why vendor and cross-build this instead of using a distribution package
 
-Debian Buster does carry `libmbedtls-dev` for armhf - the same pattern already used for zlib, ncursesw, and OpenSSL
-in this project. But that package is the 2.16.x line, from around 2019 - for a *TLS* library specifically (unlike
-zlib or ncursesw), that vintage almost certainly has real CVEs patched upstream since, which matters more here than
-it did for those. So mbedTLS is vendored and cross-built fresh instead, at a current pinned release, the same
-"minimal, current" bar already set for [nginx](../nginx/README.md).
+A distribution's ARM package of mbedTLS is typically an older release line (the old Debian Buster one was 2.16.x, from
+around 2019) - and for a *TLS* library specifically (unlike zlib or ncursesw) that vintage almost certainly has real
+CVEs patched upstream since. It would also have to be a static library built for the musl sysroot. So mbedTLS is
+vendored and cross-built fresh instead, at a current pinned release, the same "minimal, current" bar already set for
+[nginx](../nginx/README.md).
 
 ## 3.6.7, not the newer 4.2.0
 

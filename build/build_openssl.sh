@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Cross-builds OpenSSL for the TC002 (arm-linux-gnueabihf), STATICALLY
-# linked, as nginx's TLS backend - see nginx/README.md and this script's
+# Cross-builds OpenSSL for the TC002 (arm-linux-musleabihf, the static musl
+# toolchain in build/docker-alpine-arm), STATICALLY linked, as nginx's TLS
+# backend - see nginx/README.md and this script's
 # own comments for how this decision changed from an earlier dynamic
 # design. Real, confirmed problems with the dynamic approach (a
 # -Wl,-rpath dance, then an on-device "libatomic.so.1: cannot open
@@ -156,12 +157,9 @@ configure_and_build()
   # will nginx once it links against the same static archives - see
   # nginx/README.md).
   #
-  # libatomic: this project's build container's arm-linux-gnueabihf-gcc
-  # was confirmed (2026-09-12, real on-device failure) to need a dynamic
-  # libatomic.so.1 the device does not have - a WSL-based cross-toolchain
-  # used to verify most of this script did not even exhibit the issue,
-  # confirming it is toolchain-version-specific, not something to assume
-  # away. See the make override below for how this is actually forced
+  # libatomic: a cross compiler can pull in a dynamic libatomic.so.1 that the
+  # device does not have (seen on-device with an earlier, dynamic toolchain),
+  # so it must be linked statically. See the make override below for how this is forced
   # static - NOT a bare "-Wl,-Bstatic,-latomic,-Bdynamic" passed to
   # Configure, which was tried first and confirmed NOT to work: OpenSSL's
   # own Configure independently auto-detects the platform's atomic-library
@@ -184,7 +182,56 @@ configure_and_build()
   # - confirmed directly - so building with no-engine makes OpenSSL
   # define OPENSSL_NO_ENGINE and nginx skip that code entirely at compile
   # time, avoiding the unlinkable symbols without patching nginx at all.
-  log "running: ./Configure linux-armv4 --cross-compile-prefix=${TARGET_TRIPLE}- --prefix=/data --openssldir=/etc/ssl no-shared no-engine ${TARGET_CFLAGS}"
+  # no-async: OpenSSL's async support (used for engines/offload, which
+  # nginx here does not use) is built on makecontext()/swapcontext(), which
+  # musl does not implement - the build fails without this, and Alpine's own
+  # OpenSSL package is built with it too.
+  # no-tests: skips building OpenSSL's own test programs (a plain "make"
+  # otherwise builds them all) - nothing here runs them.
+  # no-module/no-legacy: OpenSSL 4 builds providers/legacy.so (old algorithms
+  # - MD4, RC4, DES ... - as a loadable plug-in) even with no-shared, and the
+  # "-static" in the make LDFLAGS below then makes linking that SHARED object
+  # fail with thousands of "relocation ... can not be used when making a
+  # shared object" errors (a shared object cannot contain a static libc).
+  # Nothing here can use a loadable provider anyway: nginx does not load
+  # providers, and dlopen() does not work in a static binary.
+  log "running: ./Configure linux-armv4 --cross-compile-prefix=${TARGET_TRIPLE}- --prefix=/data --openssldir=/etc/ssl no-shared no-engine no-async no-tests no-module no-legacy ${TARGET_CFLAGS}"
+
+  # Size trimming - whole algorithm/protocol families that a TLS server (nginx)
+  # and an occasionally used CLI never need. With static linking, OpenSSL's
+  # provider tables reference nearly every algorithm, so the linker cannot
+  # drop them the way it drops unused functions; not compiling them in is the
+  # only way to shrink nginx and the CLI (3.3 MB, all of it OpenSSL).
+  # Decided together with the device's owner:
+  #   protocols:  dtls, sctp, quic, srp, psk, ssl-trace, comp (TLS compression)
+  #   other:      cms, ct, ts, cmp, ocsp (no OCSP stapling wanted)
+  #   old ciphers/digests: idea seed rc2 rc4 rc5 bf cast md2 mdc2 whirlpool
+  #   national/exotic:     sm2 sm3 sm4 camellia aria ec2m weak-ssl-ciphers
+  #   old TLS:    tls1 tls1_1 (TLS 1.2 and 1.3 stay)
+  # Kept: TLS 1.2/1.3, AES-GCM/CCM, ChaCha20-Poly1305, RSA, ECDSA/ECDH, DH,
+  # SHA-1/2/3, MD5, X.509, PEM/PKCS#12.
+  #
+  # Configure aborts on an option it does not know, and OpenSSL 4 removed some
+  # old algorithms altogether (so e.g. "no-md2" may no longer exist): each
+  # name is checked against the Configure file of THIS version first, and an
+  # unknown one is skipped with a log line instead of failing the build.
+  local -a trim_args=()
+  local trim_option
+
+  for trim_option in dtls sctp quic srp psk ssl-trace comp \
+                     cms ct ts cmp ocsp \
+                     idea seed rc2 rc4 rc5 bf cast md2 mdc2 whirlpool \
+                     sm2 sm3 sm4 camellia aria ec2m weak-ssl-ciphers \
+                     tls1 tls1_1
+  do
+    if grep -qw -- "$trim_option" "${SRC_DIR}/Configure"; then
+      trim_args+=("no-${trim_option}")
+    else
+      log "skipping no-${trim_option}: not a known option in OpenSSL ${OPENSSL_VERSION}'s Configure"
+    fi
+  done
+
+  log "size-trimming options passed to Configure: ${trim_args[*]}"
 
   ( cd "$SRC_DIR" \
     && ./Configure linux-armv4 \
@@ -193,6 +240,11 @@ configure_and_build()
          --openssldir=/etc/ssl \
          no-shared \
          no-engine \
+         no-async \
+         no-tests \
+         no-module \
+         no-legacy \
+         "${trim_args[@]}" \
          "$TARGET_CFLAGS" \
        >"$configure_log" 2>&1 \
     && test -f Makefile \
@@ -206,27 +258,23 @@ configure_and_build()
 
   log "verified: Configure succeeded and selected the ${TARGET_TRIPLE}- cross toolchain"
 
-  # Patch CNF_EX_LIBS's own real, auto-detected value (captured from the
-  # generated Makefile, not hardcoded/assumed) rather than overriding it
-  # with an invented replacement - so anything else Configure decided
-  # this platform needs in there (currently "-ldl -pthread" alongside
-  # "-latomic") survives untouched, and only the one token this is
-  # actually about gets wrapped.
+  # Configure detects which extra libraries this platform needs (currently
+  # "-ldl -pthread", and possibly "-latomic") and bakes them into the
+  # Makefile as CNF_EX_LIBS. Everything is linked statically now (see the
+  # make step below), so the old -Bstatic/-Bdynamic wrapping of -latomic
+  # (needed only to stop a dynamic libatomic.so.1 being required on the
+  # device) is gone - musl's libdl is an empty stub archive, and libatomic
+  # comes from the toolchain as libatomic.a. If a link error says
+  # "cannot find -latomic", the toolchain has no static libatomic.
   local cnf_ex_libs
-  cnf_ex_libs="$(grep -E '^CNF_EX_LIBS=' "${SRC_DIR}/Makefile" | head -n1 | cut -d= -f2-)"
+  cnf_ex_libs="$(grep -E '^CNF_EX_LIBS=' "${SRC_DIR}/Makefile" | sed -n '1p' | cut -d= -f2-)"
 
-  echo "$cnf_ex_libs" | grep -qE -- '(^|[[:space:]])-latomic([[:space:]]|$)' \
-    || die "CNF_EX_LIBS in ${SRC_DIR}/Makefile does not mention -latomic as expected (got: '${cnf_ex_libs}') - OpenSSL's own atomic-library detection may have changed since this was last checked; inspect that file directly before assuming the override below is still correct"
-
-  local cnf_ex_libs_patched
-  cnf_ex_libs_patched="$(echo "$cnf_ex_libs" | sed -E 's/(^|[[:space:]])-latomic([[:space:]]|$)/\1-Wl,-Bstatic -latomic -Wl,-Bdynamic\2/')"
-
-  log "patching CNF_EX_LIBS for the static libatomic link: '${cnf_ex_libs}' -> '${cnf_ex_libs_patched}'"
+  log "Configure's own CNF_EX_LIBS: '${cnf_ex_libs}'"
 
   local make_log="${WORK_DIR}/build-openssl-make.log"
   local make_exit=0
 
-  ( cd "$SRC_DIR" && make CNF_EX_LIBS="$cnf_ex_libs_patched" 2>&1 | tee "$make_log"; exit "${PIPESTATUS[0]}" ) \
+  ( cd "$SRC_DIR" && make LDFLAGS="-static ${TARGET_LDFLAGS_SIZE}" 2>&1 | tee "$make_log"; exit "${PIPESTATUS[0]}" ) \
     || make_exit=$?
 
   if [ "$make_exit" -ne 0 ]; then
@@ -290,42 +338,18 @@ verify_artifacts()
 
     rm -rf "$tmp_extract"
 
-    log "verified: ${lib} is a real arm-linux-gnueabihf archive"
+    log "verified: ${lib} is a real ${TARGET_TRIPLE} archive"
   done
 
-  # The "openssl" CLI tool: confirmed to be a real ARM binary, and now
-  # (with no-shared) NOT dynamically linked against any libssl/libcrypto
-  # at all - it carries its own copy of whatever OpenSSL code it
-  # actually calls. Still expected to dynamically link ordinary system
-  # libraries (libc, libpthread, libdl) - just not this project's own
-  # crypto code, and not libatomic (forced static above, confirmed here
-  # rather than assumed).
+  # The "openssl" CLI tool: a real ARM binary, fully static - it carries its
+  # own copy of the OpenSSL code it calls and of musl, so there must be no
+  # NEEDED entry at all and no program interpreter.
   local cli="${SRC_DIR}/apps/openssl"
-  local needed
 
   file -b "$cli" | grep -qi 'ELF' \
     || die "${cli} is not an ELF binary (got: $(file -b "$cli"))"
 
-  needed="$(readelf -d "$cli" 2>/dev/null | grep NEEDED || true)"
-  log "dynamic dependencies of apps/openssl:"
-  if [ -n "$needed" ]; then
-    echo "$needed" | while IFS= read -r line
-    do
-      log "  ${line}"
-    done
-  else
-    log "  <none>"
-  fi
-
-  if echo "$needed" | grep -qiE 'libssl\.so|libcrypto\.so'; then
-    die "apps/openssl still has a dynamic libssl/libcrypto dependency - no-shared did not fully take effect (see the dependency list logged just above)."
-  fi
-
-  if echo "$needed" | grep -qiE 'libatomic\.so'; then
-    die "apps/openssl still has a dynamic libatomic dependency - the -Wl,-Bstatic,-latomic,-Bdynamic override did not fully take effect (see the dependency list logged just above)."
-  fi
-
-  log "verified: apps/openssl is a real, self-contained ARM binary with no dynamic libssl/libcrypto/libatomic dependency"
+  verify_static_binary "$cli"
 }
 
 install_artifacts()
@@ -462,11 +486,18 @@ write_manifest()
   local commit
   commit="$(project_git_commit)"
   local cc_version
-  cc_version="$("$TARGET_CC" --version | head -n1)"
+  cc_version="$("$TARGET_CC" --version | sed -n '1p')"
   local libssl_sha256 libcrypto_sha256 cli_sha256
   libssl_sha256="$(sha256sum "${OPENSSL_SDK_DIR}/lib/libssl.a" | cut -d' ' -f1)"
   libcrypto_sha256="$(sha256sum "${OPENSSL_SDK_DIR}/lib/libcrypto.a" | cut -d' ' -f1)"
   cli_sha256="$(sha256sum "${OPENSSL_DEVICE_DIR}/data/bin/openssl" | cut -d' ' -f1)"
+
+  # Sizes too: the CLI is what lands on the device, the archives are what nginx
+  # links (only the parts it uses end up in nginx).
+  local libssl_size libcrypto_size cli_size
+  libssl_size="$(stat -c%s "${OPENSSL_SDK_DIR}/lib/libssl.a")"
+  libcrypto_size="$(stat -c%s "${OPENSSL_SDK_DIR}/lib/libcrypto.a")"
+  cli_size="$(stat -c%s "${OPENSSL_DEVICE_DIR}/data/bin/openssl")"
 
   {
     echo "{"
@@ -485,6 +516,9 @@ write_manifest()
     echo "  \"headers\": \"sdk/include/openssl\","
     echo "  \"device_dir\": \"device\","
     echo "  \"cli_tool\": \"device/data/bin/openssl\","
+    echo "  \"cli_size_bytes\": ${cli_size},"
+    echo "  \"libssl_size_bytes\": ${libssl_size},"
+    echo "  \"libcrypto_size_bytes\": ${libcrypto_size},"
     echo "  \"cli_sha256\": \"${cli_sha256}\""
     echo "}"
   } >"$manifest"
@@ -496,8 +530,10 @@ write_manifest()
 main()
 {
   require_container
+  require_musl_toolchain
 
   header "openssl ${OPENSSL_VERSION}: checking prerequisites"
+  require_cmd readelf
   require_cmd sha256sum
   require_cmd tar
   require_cmd "$TARGET_CC"

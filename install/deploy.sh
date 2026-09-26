@@ -17,7 +17,7 @@
 # tool (curl/nginx/openssl - see install_on_demand.sh), verify, then start
 # Dropbear itself (start_dropbear.sh - runs init.sh on the device over
 # "adb shell", see its own comments). Does not build anything (run
-# build/build_all.sh - and, once confirmed working, build_ncdu.sh - first),
+# ./build_all.sh first),
 # and never touches startup persistence or ADB itself - those stay
 # separate, deliberately gated steps (see docs/recovery.md); starting
 # Dropbear is not one of them, since it has to run again after every
@@ -143,7 +143,7 @@ main()
   header "deploy: installing dropbear"
   "${SCRIPT_DIR}/install_dropbear.sh" "${COMMON_ARGS[@]}"
 
-  header "deploy: installing compressed-on-demand tools (curl/nginx/openssl)"
+  header "deploy: installing compressed-on-demand tools (curl/nginx/7zz; the openssl CLI only if TC002_INSTALL_OPENSSL_CLI=1)"
   "${SCRIPT_DIR}/install_on_demand.sh" "${COMMON_ARGS[@]}"
 
   header "deploy: verifying installation"

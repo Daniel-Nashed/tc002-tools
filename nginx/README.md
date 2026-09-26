@@ -8,7 +8,7 @@ Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](..
 license (2-clause BSD). No source is vendored into this repository; `build/build_nginx.sh` downloads the pinned
 release tarball fresh at build time, the same way every other `build/` script here handles its upstream source.
 
-Pinned to nginx.org's **Mainline** branch (1.31.5), not **Stable** (1.30.4, this project's original pin here) - a
+Pinned to nginx.org's **Mainline** branch (1.31.6, bumped from 1.31.5 on 2026-09-25), not **Stable** (1.30.4, this project's original pin here) - a
 deliberate exception to this project's usual preference for stable over bleeding-edge releases (Dropbear, `curl`),
 made once [OpenSSL](../openssl/README.md) moved to 4.0.2: both are genuinely the latest available release of each
 project as of 2026-09-13, checked directly against nginx.org's own download page and OpenSSL's real GitHub
@@ -87,10 +87,12 @@ genuinely useful diagnostic page, matching this project's existing diagnostic-to
 
 Disabled - niche features not relevant to a small embedded proxy/status server, all confirmed via an actual native
 build (2026-09-12) that disabling every one of them still produces a working build: `ssi`, `userid`, `auth_basic`,
-`mirror`, `autoindex`, `geo`, `map`, `split_clients`, `referer`, `fastcgi`, `uwsgi`, `scgi`, `grpc`, `memcached`,
+`mirror`, `autoindex`, `geo`, `split_clients`, `referer`, `fastcgi`, `uwsgi`, `scgi`, `grpc`, `memcached`,
 `limit_conn`, `limit_req`, `empty_gif`, `browser`, and every `upstream_*` load-balancing extra (`hash`, `ip_hash`,
 `least_conn`, `random`, `keepalive`, `zone`, `sticky`). The mail proxy (POP3/IMAP/SMTP) is not built either - unlike
 the modules above, it is opt-in (`--with-mail`) in nginx itself, so no flag was even needed to exclude it.
+
+**`map` is enabled** (it was on the disabled list in the first version of this build; re-enabled 2026-09-26 on request). One limitation: without PCRE, `map` matches exact names, wildcards and hostnames only - regular-expression patterns (`~`, `~*`) need PCRE, which this build does not have. Likewise `return`, `if`, `set` and `rewrite` are all part of the rewrite module, which needs PCRE, so they are not available either (see above).
 
 Verified end to end with a real native (x86_64) build of this exact flag set (2026-09-12): static file serving,
 `stub_status`, and `proxy_pass` to a backend all confirmed working.
@@ -98,19 +100,11 @@ Verified end to end with a real native (x86_64) build of this exact flag set (20
 Nothing here is final - if you need `rewrite` or any of the disabled modules later, that is a small, tracked
 addition to `build/build_nginx.sh`'s flag list, not a redesign.
 
-## zlib (gzip's dependency): kept, but statically linked
+## zlib (gzip's dependency): kept, statically linked
 
-`gzip` is worth keeping - real bandwidth savings for a reverse proxy - so it was never actually disabled. But the
-real `arm-linux-gnueabihf` cross-build (2026-09-12) confirmed the exact same on-device risk curl's zlib support
-already ran into (see [curl/README.md](../curl/README.md)): dynamically linking against whatever `libz.so.1` happens
-to exist on the device risks a build-time-vs-device symbol-versioning mismatch. `build/build_nginx.sh` now patches
-the generated `objs/Makefile` directly, wrapping the `-lz` its own `auto/lib/zlib/conf` bakes into the final link
-recipe in `-Wl,-Bstatic ... -Wl,-Bdynamic`.
-
-This is simpler than curl's fix: nginx's build has no libtool anywhere (`$(LINK)` is just `$(CC)` directly, confirmed
-in the real generated `objs/Makefile`), so none of the libtool-specific `-lNAME` reordering that defeated this exact
-technique for curl applies here - the plain wrap survives untouched all the way to the real linker invocation,
-confirmed directly against the real generated Makefile before relying on it.
+`gzip` is worth keeping - real bandwidth savings for a reverse proxy. zlib is Alpine's static armv7 `zlib-static` from
+the ARM sysroot, linked into the one static binary, so nothing depends on the device's own `libz.so.1` (an earlier
+dynamic build risked a symbol-versioning mismatch with it, see [../docs/musl_migration.md](../docs/musl_migration.md)).
 
 ## Cross-compiling nginx: `--crossbuild`, not `--host`
 
@@ -143,38 +137,28 @@ above, verifies the result is a real ELF binary with no dynamic dependency on Op
 `dist/manifest-nginx.json`.
 
 Cross-compiling nginx at all needs QEMU user-mode emulation for the ARM test binaries its own `configure` compiles
-and executes even in `--crossbuild` mode - see
-[build/docker/register_qemu_arm.sh](../build/docker/register_qemu_arm.sh) for the one-off `--privileged` binfmt
-registration step that makes this possible, and why patching nginx's own build scripts instead was rejected. Called
-from both the top-level [build_nginx.sh](../build_nginx.sh) and the root [build_all.sh](../build_all.sh) whenever it
+and executes even in `--crossbuild` mode. **Now solved without registering anything with the host kernel:**
+[build/qemu-cc-wrapper.sh](../build/qemu-cc-wrapper.sh) is passed to nginx as `--with-cc`; it compiles with the real
+cross-compiler and, for a test program named `autotest`, replaces the executable with a launcher script that runs it
+under `qemu-arm` (the Alpine package, installed in the build image) with a private root holding the musl loader. The
+final `objs/nginx` link is untouched. The text below is the history of the earlier approach - a one-off `--privileged`
+binfmt_misc registration (`register_qemu_arm.sh`, since removed), called from both the top-level [build_nginx.sh](../build_nginx.sh) and the root [build_all.sh](../build_all.sh) whenever it
 is about to build nginx (`--with-nginx`/`--all`, or `build_all.sh build/build_nginx.sh` directly) - originally only
 `build_nginx.sh` did this, which meant building nginx via `build_all.sh` alone silently skipped it and failed
 confusingly at `./configure: error: C compiler ... is not found` (confirmed as a real failure, 2026-09-15 - the
 compiler itself works fine, it just cannot execute the resulting ARM test binary without this registration).
 
+## Testing it on the device
+
+See [tests/nginx/README.md](../tests/nginx/README.md): a ready-made configuration, page and certificate maker, and one script (`tests/nginx/run_test.sh`) that pushes them to the device, starts nginx, checks HTTP, `map`, `stub_status` and HTTPS (TLS 1.2 and 1.3) from the host, and cleans up again.
+
 ## Status
 
-Configure flags, the `--crossbuild` behavior, and the minimal module set were first confirmed against a real
-*native* (x86_64) build of nginx 1.30.4, including a working static-file/`stub_status`/`proxy_pass` test end to end.
-The real `arm-linux-gnueabihf` cross-build succeeded in the actual build container (2026-09-12), and - at that same
-1.30.4/OpenSSL 3.5.8 pin - TLS was confirmed fully working end to end on the real device (2026-09-13): a real
-`curl -v -k https://localhost` against the on-device nginx completed a genuine `TLSv1.3` handshake
-(`TLS_CHACHA20_POLY1305_SHA256`), with `/etc/passwd`/`/etc/group` in place (see
-[../docs/platform.md](../docs/platform.md)) and static zlib linked correctly. That is the most thoroughly verified
-combination this project has for nginx.
-
-The pin has since moved to nginx 1.31.5 (Mainline) + OpenSSL 4.0.2 - see [openssl/README.md](../openssl/README.md)
-for why. This combination has now built successfully end to end in this project's own real Docker container:
-`build_openssl.sh` then `build_nginx.sh` both completed, producing a real stripped ARM `nginx` binary (3,463,264
-bytes, `dist/manifest-nginx.json` confirms `"tls": "openssl-static"`, `"pcre": "none"`, `"zlib": "static"`, and no
-dynamic OpenSSL/PCRE/zlib/libatomic dependency in its `readelf` output - `verify_artifact()` would have failed the
-build otherwise). What has not yet been explicitly re-run at this exact pin is the live on-device TLS handshake
-test - the 1.30.4/3.5.8 combination above remains the only one confirmed with a real `curl -v -k` handshake against
-actual hardware; this newer pin is confirmed to build and link cleanly, with the same static-linking approach and
-OpenSSL code paths, but not yet independently re-verified with a live connection.
-
-No install script or on-device config wiring exists yet either way - this covers the build step, matching how
-every other component here started. Since everything is statically linked, deploying nginx needs no separate
-library pushed alongside it - just the one binary, and (see [openssl/README.md](../openssl/README.md)'s "Static,
-not dynamic" section) a device that only needs the HTTPS listener never needs the `openssl` CLI or any shared
-library alongside it either.
+Built with the static musl toolchain and verified on the real device with [tests/nginx](../tests/nginx/README.md):
+`nginx -t`, plain HTTP, the `map` module, `stub_status`, and HTTPS forced to TLS 1.2 and to TLS 1.3 - once with an
+RSA and once with an ECDSA certificate - all pass, and the device's free memory afterwards is back where it started.
+The binary is about 3 MB (OpenSSL 4.0.2 statically linked with the trimmed feature set described in
+[../openssl/README.md](../openssl/README.md), zlib, no PCRE); the manifest `dist/manifest-nginx.json` records `"tls":
+"openssl-static"`, `"pcre": "none"`, `"zlib": "static"`, and `verify_artifact()` fails the build if the result is not
+fully static. Deployment is compressed-on-demand (`/data/bin/nginx` is a wrapper that unpacks it into RAM on start and
+deletes it afterwards, see [../docs/device_layout.md](../docs/device_layout.md#deployment-modes)).

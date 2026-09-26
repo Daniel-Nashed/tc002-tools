@@ -30,9 +30,9 @@ the established pattern.
 ## The first C++ component here
 
 Every other component in this project is plain C. 7-Zip's real source is C++, so `build/build_7zip.sh` needs
-`g++-arm-linux-gnueabihf`, not just the `gcc-arm-linux-gnueabihf` every other build here uses - added to
-[../build/docker/Dockerfile](../build/docker/Dockerfile) and
-[../build/setup_build_platform.sh](../build/setup_build_platform.sh) specifically for this.
+a C++ compiler, not just the C one every other build here uses. The musl-cross-make toolchain in
+[../build/docker-alpine-arm/Dockerfile](../build/docker-alpine-arm/Dockerfile) builds a `g++` and a static libstdc++ as
+part of the compiler.
 
 ## Building `7zz`, not `7za`/`7zr`/p7zip's `7z`
 
@@ -63,47 +63,24 @@ acceleration is used either way: confirmed directly in the pinned release's own 
 Linux assembler code only covers x86/x86-64 (MASM syntax) and arm64 (GNU assembler), not 32-bit `arm` - this is a
 plain C/C++ build on this target regardless.
 
-`CFLAGS_WARN` gets the same "pick your version" treatment in 7-Zip's own `warn_gcc.mak`: several sequential
-`CFLAGS_WARN = ...` reassignments, one per GCC version (4.8 through 9+), with the last one winning by default.
-That default assumes GCC 9+; this project's build container pins Debian Buster's `arm-linux-gnueabihf` 8.3.0 (see
-[../build/docker/Dockerfile](../build/docker/Dockerfile)), which predates one of those flags. Confirmed by a real
-failed build (2026-09-13) against this project's own container: `unrecognized command line option
-'-Waddress-of-packed-member'` - a warning flag `warn_gcc.mak` only adds starting with its GCC-9 set.
-`build/build_7zip.sh` overrides `CFLAGS_WARN` with `warn_gcc.mak`'s own GCC-8 set instead (everything up through
-`-Wcast-align=strict`/`-Wmissing-attributes`, without the GCC-9-only flag) - the correct match for this
-container's actual compiler, not a workaround. This did not show up in this project's own WSL cross-compile check
-first, since WSL's `arm-linux-gnueabihf-g++` there is a much newer GCC (15.x) that does support the flag.
+`CFLAGS_WARN` is picked by 7-Zip's own `warn_gcc.mak` from the compiler version (several sequential reassignments, one
+per GCC version, the last one winning). The musl toolchain's GCC is 9.4.0, so the default set applies and
+`build/build_7zip.sh` does not override it. (An older, since removed GCC 8 toolchain needed an override because a warning
+flag only exists from GCC 9; if a newer 7-Zip ever adds a flag this GCC does not know, the build fails with
+`unrecognized command line option` - override `CFLAGS_WARN` then.)
 
-## Dynamic linking - a deliberate exception, not a reversal
+## Static linking
 
-The very first build here was fully static (`LDFLAGS_STATIC_3=-static`, a real built-in knob in 7-Zip's own
-`var_gcc_arm.mak`), on the reasoning that 7zz is this project's first C++ binary and dynamic `libstdc++`
-symbol-versioning mismatches are exactly the same risk class already hit for real elsewhere in this project
-(`nshbox`'s `OPENSSL_1_1_1`, curl's zlib - see each component's own README).
+7zz is built fully static (`LDFLAGS_STATIC_3=-static`, a real built-in knob in 7-Zip's own `var_gcc_arm.mak`): libstdc++
+and musl are linked in, so the binary needs nothing on the device - no `libstdc++.so.6`, no matching libc, no NSS
+problem. That is the same reasoning as for every other component here (see
+[../docs/musl_migration.md](../docs/musl_migration.md)); `build/build_7zip.sh` checks that the result has no NEEDED
+entries and no program interpreter. Size is kept down with `-Os`, `-ffunction-sections`/`-fdata-sections` and
+`-Wl,--gc-sections` (see "Build"): 2.27 MB without, about 1.7 MB with. (An earlier version of this project linked 7zz
+dynamically to save flash; that needed the device's own `libstdc++.so.6` and was dropped in favour of static musl.)
 
-That changed after weighing the real numbers: a static binary here is ~2.1MB, self-contained. A dynamic one is
-~1.6MB, but depends on `libstdc++.so.6` (~1.45MB, Debian Buster's real armhf package size) and `libgcc_s.so.1`
-(~130KB) being present on the device - if they're not, shipping them alongside pushes the *total* past the static
-size, not under it. The deciding factor: `libc.so.6` compatibility with this project's Buster (~2.28) toolchain is
-already well-proven - every other dynamically-linked binary here (Dropbear, `nshbox`, `kilo`, `ncdu`, `curl`,
-`nginx`) already depends on it successfully, and the TC002 is confirmed to run glibc ~2.30 - building against an
-older glibc and running on a newer one is the safe direction glibc's own ABI compatibility guarantees. `libstdc++`
-is a separate library from glibc itself (not covered by that same track record, since nothing else here is C++),
-but with the device's `libstdc++.so.6` availability confirmed, dynamic linking became the better call: smaller,
-consistent with how the rest of this project already links, and no longer bundling an entire C++ standard library
-into every binary that happens to need it.
-
-`build/build_7zip.sh`'s own `verify_artifact()` checks the result depends on exactly
-`libstdc++.so.6`/`libgcc_s.so.1`/`libc.so.6`/`ld-linux-armhf.so.3` and nothing else - confirmed directly
-(2026-09-13) against a real cross-compile.
-
-If a future check ever finds the device's `libstdc++` missing or incompatible after all, reverting to static is a
-one-line change (`LDFLAGS_STATIC_3=-static` back in `configure_and_build()`) - not a redesign; this isn't a
-one-way door.
-
-7-Zip's own build also already strips the binary during linking (`-s` in the linker flags, not a separate `strip`
-invocation) - confirmed directly against the real build output, so `build/build_7zip.sh` skips a redundant
-`arm-linux-gnueabihf-strip` step other components here need.
+7-Zip's own build already strips the binary while linking (`-s` in the linker flags), so `build/build_7zip.sh` skips the
+separate `strip` step other components need.
 
 ## No RAR support
 
@@ -121,34 +98,15 @@ reads and writes every other format it supports by default (`.7z`, `.zip`, `.tar
 ./build_7zip.sh
 ```
 
-Runs inside the build container like every other `build/` script - see
-[../docs/build_platform.md](../docs/build_platform.md). Downloads and checksum-verifies the pinned release
-tarball, cross-compiles `7zz` dynamically (with RAR support disabled) as described above, verifies the result
-depends on exactly the expected libraries, and writes `dist/7zz` plus `dist/manifest-7zip.json`.
+Runs in the Alpine ARM32 musl container ([../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)).
+Downloads and checksum-verifies the pinned release tarball, cross-compiles `7zz` fully static (`LDFLAGS_STATIC_3=-static`,
+with RAR support disabled), verifies it has no NEEDED entries and no program interpreter, and writes `dist/7zz` plus
+`dist/manifest-7zip.json`. To keep the static build small it is compiled with `-Os` (via 7-Zip's own `FLAGS_FLTO` variable, which sits after its `-O2`) and `-ffunction-sections`/`-fdata-sections`, and linked with `-Wl,--gc-sections` (commented out in 7-Zip's own makefile); the first static musl build without these was 2.27 MB. Opt-in for `./build_all.sh` (`--with-7zip` or `--all`).
 
 ## Status
 
-The static build was cross-compiled successfully in an independent WSL environment (2026-09-13, real
-`arm-linux-g++`/`gcc` cross-toolchain, the same kind of stand-in this project used for curl, nginx, OpenSSL, and
-gzip before their own real container builds were confirmed) and, separately, inside this project's own real Docker
-container (after fixing the `CFLAGS_WARN`/GCC-8-vs-9 issue described above) - both confirmed working end to end,
-including a correctly-written manifest after fixing the `write_manifest()` bug described above.
-
-The pin has since moved from static to dynamic (see "Dynamic linking" above). A real build inside this project's
-own container (2026-09-13) revealed one more thing this project's own WSL check had missed: Debian Buster's older
-glibc (~2.28) predates glibc 2.34's merge of `libpthread`/`libm`/`libdl` into `libc.so.6` itself, so the real
-binary genuinely needs `libpthread.so.0`/`libm.so.6`/`libdl.so.2` as separate shared libraries, alongside
-`libstdc++.so.6`/`libgcc_s.so.1`/`libc.so.6` - WSL's much newer toolchain glibc had already folded those three
-into `libc.so.6`, hiding them from that earlier check entirely. `verify_artifact()` was updated to expect this
-real set. Of these, `libpthread.so.0` already has direct precedent in this project (curl's own manifest already
-lists it as a working dependency); `libdl.so.2`/`libm.so.6` are new here but are core glibc-family libraries
-present on any standard glibc system in this version range, not niche add-ons. Not yet confirmed that the device's
-`libstdc++.so.6` specifically actually works correctly at runtime, since 7zz is not installed there yet, or
-exercised for basic archive create/extract functionality - the build linking cleanly and depending on exactly the
-expected libraries is confirmed, actual on-device behavior is not.
-
-Joins the compressed-on-demand tier (with curl/nginx/openssl - see
-[../docs/device_layout.md](../docs/device_layout.md#deployment-modes)) rather than getting pushed by hand: its
-dynamic build (~1.6-2.1MB) is closer in size to curl than to any persistent tool this project ships, matching the
-same size-based reasoning already used for that tier. Opt-in, not built by `./build_all.sh` on its own - either
-`./build_all.sh build/build_7zip.sh` directly, or `build/build_all.sh --with-7zip` (or `--all`).
+Built fully static with the musl toolchain in this project's own Alpine container (about 1.7 MB stripped, no NEEDED
+entries, no program interpreter), with a correct manifest. It joins the compressed-on-demand tier (with
+curl/nginx/openssl - see [../docs/device_layout.md](../docs/device_layout.md#deployment-modes)) rather than being
+pushed by hand: at that size it is closer to curl than to any persistent tool this project ships. Opt-in, not built by
+`./build_all.sh` on its own - either `./build_7zip.sh` directly, or `./build_all.sh --with-7zip` (or `--all`).

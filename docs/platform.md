@@ -2,7 +2,7 @@
 # The TC002 / FlyThings platform
 
 This document covers facts about the Ulanzi TC002 device and its firmware itself. It is separate from
-[build_platform.md](build_platform.md), which covers the Debian Buster host used to *cross-compile* for the device.
+[build_platform.md](build_platform.md), which covers the container used to *cross-compile* for the device.
 
 ## TC001 vs TC002: two different devices, not two versions of the same one
 
@@ -90,7 +90,7 @@ authenticated replacement for interactive access; it does not by itself make lea
 
 ## Verified facts (one tested device)
 
-- ARM 32-bit hard-float userspace, ABI-compatible with Debian Buster's `arm-linux-gnueabihf` cross toolchain.
+- ARM 32-bit hard-float userspace; everything here is built for it with the `arm-linux-musleabihf` cross toolchain (static musl).
 - BusyBox is present and provides most core utilities.
 - `adbd` is reachable and already grants a root shell - this project's own provisioning notes never needed a separate
   `adb root` step.

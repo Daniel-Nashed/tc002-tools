@@ -33,10 +33,11 @@ DEVICE_OVERRIDE=""
 usage()
 {
   cat <<'EOF'
-Usage: install_on_demand.sh [--device SERIAL] [--config FILE]
+Usage: install_on_demand.sh [--device SERIAL] [--config FILE] [--with-openssl]
 
 Packages every built compressed-on-demand tool (see on_demand_tools() in
-install/common.sh - currently curl, nginx, openssl, 7zz) into
+install/common.sh - currently curl, nginx, 7zz, and the OpenSSL CLI only with
+--with-openssl) into
 dist/on-demand.tar.gz, pushes it to INSTALL_PREFIX/bin/on-demand.tar.gz,
 pushes runtime/on-demand-run.sh to INSTALL_PREFIX/bin/on-demand-run,
 symlinks INSTALL_PREFIX/bin/<tool> to it for each bundled tool, and
@@ -48,6 +49,8 @@ ncdu entirely, are staged separately by install_etc.sh, not here.
 
   --device SERIAL   ADB device serial (overrides DEVICE from config).
   --config FILE     Config file (default: config/tc002-tools.conf).
+  --with-openssl    Also pack the OpenSSL CLI (3.2 MB uncompressed; by default it
+                     is left out - push it to /tmp only when needed).
   -h, --help        Show this help.
 EOF
 }
@@ -62,6 +65,10 @@ do
     --config)
       CONFIG_FILE="$2"
       shift 2
+      ;;
+    --with-openssl)
+      export TC002_INSTALL_OPENSSL_CLI=1
+      shift
       ;;
     -h|--help)
       usage
@@ -183,8 +190,9 @@ link_tools()
   done
 }
 
-# on-demand-run.sh caches the extracted binary in /tmp/bin across
-# invocations within the same boot (see its own comments) - without this,
+# on-demand-run.sh normally deletes what it unpacks, but a copy can stay in
+# /tmp/bin (TC002_ON_DEMAND_KEEP=1, or one put there by hand, or an older
+# version of the wrapper that cached across invocations) - without this,
 # a copy cached there before THIS redeploy would keep running, silently
 # ignoring the archive just pushed above, until the next reboot happens
 # to wipe /tmp clean. "rm -f" on a path that was never cached is a
