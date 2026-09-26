@@ -32,7 +32,15 @@ export BUILDKIT_STEP_LOG_MAX_SPEED=-1
 IMAGE_LOG="${REPO_ROOT}/build/work-musl/image-build.log"
 mkdir -p "$(dirname "$IMAGE_LOG")"
 
-docker build --build-arg ALPINE_VERSION="$ALPINE_VERSION" --build-arg MCM_COMMIT="$MCM_COMMIT" -t "$IMAGE" "$SCRIPT_DIR" 2>&1 | tee "$IMAGE_LOG" >&2
+# TC002_SKIP_IMAGE_BUILD=1 uses an image that is already present under this name
+# and does not build one - for CI, which pulls the prebuilt image from the
+# registry (see .github/workflows/image.yml) and tags it as $IMAGE.
+if [ "${TC002_SKIP_IMAGE_BUILD:-0}" = "1" ]; then
+  docker image inspect "$IMAGE" >/dev/null 2>&1 \
+    || { echo "TC002_SKIP_IMAGE_BUILD=1, but image $IMAGE is not present" >&2; exit 1; }
+else
+  docker build --build-arg ALPINE_VERSION="$ALPINE_VERSION" --build-arg MCM_COMMIT="$MCM_COMMIT" -t "$IMAGE" "$SCRIPT_DIR" 2>&1 | tee "$IMAGE_LOG" >&2
+fi
 
 # Every container gets a readable, unique name (image, what it runs, this script's
 # process id), so "docker ps" shows what is running and parallel runs do not clash.

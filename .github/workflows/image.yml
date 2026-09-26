@@ -1,0 +1,90 @@
+# Builds the ARM cross-build image (build/docker-alpine-arm) and pushes it to the
+# GitHub container registry, once per set of inputs. The image tag is derived
+# from what decides its contents (the Dockerfile, ALPINE_VERSION and MCM_COMMIT
+# from build/versions.env), so the same inputs always give the same tag and an
+# existing tag is never rebuilt. Compiling gcc takes about 25 minutes; every
+# build workflow then just pulls the image.
+#
+# Runs manually from the Actions tab, and as a reusable workflow called by
+# build.yml, which gets the image reference back. Not bound to pushes or releases.
+name: Build image
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      ref:
+        description: Full reference (name:tag) of the build image
+        value: ${{ jobs.image.outputs.ref }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ref: ${{ steps.meta.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the image name and tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          source build/versions.env
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/tc002-tools-build-musl"
+          dockerfile_hash="$(sha256sum build/docker-alpine-arm/Dockerfile | cut -d' ' -f1)"
+          tag="$(printf '%s\n%s\n%s\n' "$ALPINE_VERSION" "$MCM_COMMIT" "$dockerfile_hash" | sha256sum | cut -c1-16)"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "ref=${image}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "alpine=${ALPINE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "mcm=${MCM_COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "Image: ${image}:${tag}"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Does this image already exist?
+        id: exists
+        shell: bash
+        run: |
+          if docker manifest inspect "${{ steps.meta.outputs.ref }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Already published - nothing to build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free disk space (the gcc build needs several GB)
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.exists.outputs.exists == 'false'
+
+      - name: Build and push the image
+        if: steps.exists.outputs.exists == 'false'
+        uses: docker/build-push-action@v7
+        with:
+          context: build/docker-alpine-arm
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.ref }}
+          build-args: |
+            ALPINE_VERSION=${{ steps.meta.outputs.alpine }}
+            MCM_COMMIT=${{ steps.meta.outputs.mcm }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
