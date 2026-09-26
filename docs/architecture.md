@@ -5,108 +5,95 @@
 Give a TC002 owner an interactive root shell over SSH, without modifying or replacing any original firmware binary,
 using a minimal cross-compiled Dropbear build that tolerates a target with no usable passwd/group/shadow database.
 
+## Scripts
+
+Where each script runs: **host** is your own machine, **container** is one of the Docker images under `build/`, and
+**device** is the TC002 itself (BusyBox `ash`, not bash).
+
+### Entry points (repository root)
+
+| Script                        | Runs on                         | What it does                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build_all.sh`                | host, then container            | Builds everything required (`--with-curl`/`--with-nginx`/`--with-openssl`/`--with-7zip` or `--all` add the opt-in tools; `--rebuild` forces). See [build_platform.md](build_platform.md).          |
+| `build_<name>.sh`             | host, then container            | One thin wrapper per component (`nshbox`, `kilo`, `gzip`, `ncdu`, `dropbear`, `curl`, `nginx`, `openssl`, `mbedtls`, `7zip`, `ca_bundle`): runs `build/build_<name>.sh` in the ARM musl container. |
+| `build_tc002-discover.sh`     | host, then a native container   | Builds the host-side discovery tool in its own native Alpine container.                                                                                                                            |
+| `verify.sh`                   | host, then container            | Checks `dist/` without a device: ARM EABI hard-float, fully static, stripped, no build-host paths, manifest present.                                                                               |
+| `tc002_setup.sh`              | host                            | Sets up a device from scratch over ADB (`install/deploy.sh`). See [manual_rollout.md](manual_rollout.md).                                                                                          |
+| `tc002_start.sh`              | host                            | Brings SSH back up on an already provisioned device, for example after a reboot: finds it again and starts Dropbear. Pushes nothing.                                                               |
+| `test_nshbox.sh`              | host, then the Ubuntu container | Builds and runs the nshbox functional tests against real GNU tools ([tests/nshbox](../tests/nshbox/README.md)).                                                                                    |
+| `test_build_nshbox_native.sh` | host, then a native container   | Builds nshbox for this host's platform into `dist/amd64/` or `dist/arm64/` and optionally runs it. Dev only, never deployed.                                                                       |
+
+### Build (`build/`)
+
+| Script                        | Runs on          | What it does                                                                                                             |
+| ----------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `build_all_musl.sh`           | container        | The in-container driver behind `build_all.sh`: builds the components in order, handles the flags and prints the summary. |
+| `build_<name>.sh`             | container        | The real build of each component (download, checksum check, cross-compile, static check, strip, manifest).               |
+| `build_tc002-discover.sh`     | native container | Static native build of the discovery tool.                                                                               |
+| `common.sh`                   | container        | Shared variables and helpers (toolchain, `log`, `die`, `verify_static_binary`, timing). Sourced, never run.              |
+| `qemu-cc-wrapper.sh`          | container        | Lets nginx's `configure` run its ARM test programs under `qemu-arm`.                                                     |
+| `docker-alpine-arm/run.sh`    | host             | Builds the ARM musl image if needed and runs a command in it with the repository mounted.                                |
+| `docker-alpine/run.sh`        | host             | The same for the native Alpine image.                                                                                    |
+| `docker-ubuntu/run.sh`        | host             | The same for the Ubuntu test image.                                                                                      |
+| `test_build_nshbox_native.sh` | native container | The build behind `test_build_nshbox_native.sh` above.                                                                    |
+| `test_nshbox_functional.sh`   | Ubuntu container | The build and run behind `test_nshbox.sh`.                                                                               |
+
+### Install (`install/`, run over ADB from the host)
+
+| Script                           | What it does                                                                                                                            |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy.sh`                      | The full deployment that `tc002_setup.sh` calls: discover, prepare, install everything that is built, verify.                           |
+| `discover_device.sh`             | Finds the device's IP with `tc002-discover` and writes it to `config/tc002-tools.conf`.                                                 |
+| `prepare_device.sh`              | Creates the project directories on the device and sets the permissions Dropbear needs.                                                  |
+| `install_dropbear.sh`            | Pushes `dropbearmulti` (and the five links), `init.sh`, `sshd.sh` and your `authorized_keys`.                                           |
+| `install_tools.sh`               | Pushes the simple persistent tools: `nshbox` (plus its applet links), `kilo`, `gzip`.                                                   |
+| `install_etc.sh`                 | Pushes `setup_etc.sh`, the `/etc` overrides, the CA bundle, and `ncdu` with its terminfo.                                               |
+| `install_on_demand.sh`           | Pushes `on-demand.tar.gz`, the wrapper `on-demand-run`, and the links for `curl`, `nginx`, `7zz` (and `openssl` with `--with-openssl`). |
+| `start.sh` / `start_dropbear.sh` | Find the device (`start.sh` only) and start Dropbear through `init.sh`. Used by `tc002_start.sh`.                                       |
+| `verify_installation.sh`         | Checks that what is on the device matches `dist/` (checksums, symlinks), and reports free memory.                                       |
+| `disable_adb.sh`                 | Pushes the ADB-retirement helper only; it never runs it. See [recovery.md](recovery.md).                                                |
+| `enable_startup.sh`              | Placeholder: persistent startup is not implemented yet.                                                                                 |
+| `common.sh`                      | Shared helpers and the deployment-mode table (`deployment_mode_for()`). Sourced, never run.                                             |
+
+### On the device (`runtime/`)
+
+| Script             | What it does                                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `init.sh`          | Entry point: refreshes `nshbox`'s applet links and the Dropbear links, then hands over to `sshd.sh`. Safe to run repeatedly. |
+| `sshd.sh`          | Generates the host key on first run and starts Dropbear. Does nothing if it is already running.                              |
+| `setup_etc.sh`     | Makes sure `/etc/passwd`, `/etc/group` and `/etc/resolv.conf` are usable. Called by `sshd.sh`.                               |
+| `on-demand-run.sh` | The wrapper behind every compressed-on-demand tool: checks free RAM, unpacks the tool into `/tmp/bin`, runs it, deletes it.  |
+| `ncdu.sh`          | Wrapper for `ncdu` that points ncurses at the shipped terminfo.                                                              |
+| `kilo.sh`          | Wrapper installed as both `vi` and `edit`.                                                                                   |
+| `disable_adb.sh`   | Stops `adbd`. Run it on the device on purpose, never from the deploy scripts.                                                |
+
+### Tests
+
+| Script                          | Runs on                  | What it does                                                                                                                                                                                                      |
+| ------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/test_build_artifacts.sh` | container                | The checks behind `verify.sh`.                                                                                                                                                                                    |
+| `tests/test_device_access.sh`   | host                     | Live SSH and SCP checks against a device where Dropbear is running.                                                                                                                                               |
+| `tests/nginx/run_test.sh`       | host, against the device | nginx on the device: `nginx -t`, HTTP, `map`, `stub_status`, TLS 1.2 and 1.3 with RSA and ECDSA, and memory before and after. `make_cert.sh` makes the certificates. See [tests/nginx](../tests/nginx/README.md). |
+
 ## Components
 
-```text
-build_all.sh          Root entry point: build everything (host-side, launches
-                       the container) - see build_platform.md.
-build_ca_bundle.sh,    One thin root-level wrapper per component - each just
-build_curl.sh, ...     execs build/docker-alpine-arm/run.sh build/build_<name>.sh. One
-                       exception: build_tc002-discover.sh, which launches its
-                       own separate Alpine container (see tc002-discover/).
-tc002_setup.sh         Root entry point: deploy to a real device over ADB
-                       (host-side, not containerized) - see manual_rollout.md.
-tc002_start.sh         Root entry point: bring an already-provisioned
-                       device's SSH access back up after a reboot (finds
-                       it again, starts Dropbear) - no push/install, see
-                       manual_rollout.md#after-a-reboot.
-verify.sh              Root entry point: verify dist/ artifacts without a
-                       device (host-side, launches the container).
-test_nshbox.sh          Root entry point: build and run the nshbox
-                       functional test suite (tests/nshbox/) - diffs
-                       nshbox's own output against real GNU coreutils/
-                       tar/grep, in its own Ubuntu container.
-test_build_nshbox_native.sh
-                       Local native dev-only nshbox test build - deliberately
-                       excluded from build_all.sh, see nshbox/README.md.
-
-build/                 Cross-build platform setup, per-component build
-                       scripts (build_<name>.sh - the real logic behind each
-                       root-level wrapper above), and common.sh (shared
-                       DIST_DIR/log/header/print_build_summary/deployment
-                       helpers used by both build/ and install/ scripts).
-build/docker-alpine-arm/  The build container for every device component:
-                       Alpine + an arm-linux-musleabihf cross compiler built
-                       from source, static binaries only - see
-                       build_platform.md and musl_migration.md.
-build/docker-alpine/   Separate, native Alpine container - only for
-                       tc002-discover, which is a host tool, not a
-                       cross-compiled device artifact - see
-                       tc002-discover/README.md.
-build/docker-ubuntu/   Separate, native Ubuntu container - only for
-                       tests/nshbox/, which needs real GNU reference
-                       tools to diff against (Alpine's own userland is
-                       BusyBox, not GNU) - see build/docker-ubuntu/README.md.
-build/work-musl/       Disposable source extraction/object files from the
-                       ARM build - gitignored, safe to delete.
-build/work/            Scratch directory of the two native containers only
-                       (tc002-discover, native nshbox test) - gitignored.
-
-install/               Host-side device provisioning and verification
-                       scripts, run over ADB - deploy.sh is the composed
-                       "do everything" entry point tc002_setup.sh calls;
-                       common.sh holds the deployment-mode table
-                       (deployment_mode_for()) and shared adb/push helpers.
-
-runtime/               Scripts that run ON THE DEVICE ITSELF (BusyBox ash,
-                       not bash) - init.sh, sshd.sh, setup_etc.sh,
-                       on-demand-run.sh, ncdu.sh, kilo.sh, disable_adb.sh,
-                       and etc/ (the passwd/group/resolv.conf overrides
-                       pushed by install/install_etc.sh). Pushed to
-                       /data/bin by install/*.sh - see device_layout.md for
-                       exactly where each one lands.
-
-dropbear/, nshbox/,    One directory per cross-compiled deliverable, each
-kilo/, ncdu/, gzip/,   with its own README.md documenting that component's
-curl/, nginx/, 7zip/   build specifics, verified/experimental status, and
-                       command reference where applicable. Most vendor an
-                       upstream tarball at build time and keep only build
-                       config here; nshbox/ (nshbox/src/) and dropbear/
-                       (dropbear/flythings-passwd-fallback.c and
-                       dropbear/patches/) are the two exceptions that carry
-                       project-maintained source directly in the repo.
-
-mbedtls/, openssl/     Vendored TLS backends, cross-built here purely as
-                       curl's and nginx's own TLS backend respectively - see
-                       each README.md. Not deliverables in their own right,
-                       except that openssl/ also produces the openssl CLI
-                       itself as an optional compressed-on-demand tool (see
-                       device_layout.md#deployment-modes), and build_ca_bundle.sh
-                       (part of build/, not openssl/) uses the build
-                       container's own OS trust store - not either of these
-                       two TLS libraries - for the CA bundle.
-
-tc002-discover/        Host-side device-discovery tool. Never touches the
-                       device and is not part of build_all.sh's device-build
-                       pipeline - see its own README.md for why it needs a
-                       separate (Alpine) container.
-
-docs/                  Project documentation - see the "Quick links" section
-                       of the root README.md for what's where.
-config/                Operator-supplied device configuration
-                       (tc002-tools.conf, gitignored - never committed;
-                       tc002-tools.conf.example is the tracked template).
-tests/                 Build-artifact tests (run inside the container, see
-                       verify.sh), device-access tests (run against a real
-                       device), and tests/nshbox/ - the nshbox functional
-                       test suite (see test_nshbox.sh), a C++ harness
-                       diffing nshbox's own output against real reference
-                       tools, run inside its own container; and
-                       tests/nginx/ - the on-device nginx test (config,
-                       page, cert maker, run_test.sh; run from the host).
-dist/                  Build output (binaries, checksums, manifest*.json) -
-                       entirely gitignored, regenerated by ./build_all.sh.
-```
+| Directory                  | What it is                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build/`                   | Build scripts: one `build_<name>.sh` per component (the real logic behind each root-level wrapper) and `common.sh`, the shared variables and helpers used by the `build/` and `install/` scripts.                                                                                                                                                                                                                                      |
+| `build/docker-alpine-arm/` | The build container for every device component: Alpine plus an `arm-linux-musleabihf` cross compiler built from source, static binaries only. See [build_platform.md](build_platform.md) and [musl_migration.md](musl_migration.md).                                                                                                                                                                                                   |
+| `build/docker-alpine/`     | Separate native Alpine container, only for `tc002-discover` (a host tool, not a device artifact). See [tc002-discover/README.md](../tc002-discover/README.md).                                                                                                                                                                                                                                                                         |
+| `build/docker-ubuntu/`     | Separate native Ubuntu container, only for `tests/nshbox/`, which needs real GNU tools to diff against (Alpine's userland is BusyBox, not GNU). See [build/docker-ubuntu/README.md](../build/docker-ubuntu/README.md).                                                                                                                                                                                                                 |
+| `build/work-musl/`         | Disposable source extraction and object files of the ARM build. Gitignored, safe to delete.                                                                                                                                                                                                                                                                                                                                            |
+| `build/work/`              | Scratch directory of the two native containers only (`tc002-discover`, the native nshbox test). Gitignored.                                                                                                                                                                                                                                                                                                                            |
+| `install/`                 | Host-side device provisioning and verification scripts, run over ADB. `deploy.sh` is the "do everything" entry point that `tc002_setup.sh` calls; `common.sh` holds the deployment-mode table (`deployment_mode_for()`) and the shared adb/push helpers.                                                                                                                                                                               |
+| `runtime/`                 | Scripts that run **on the device** (BusyBox ash, not bash) and `etc/`, the passwd/group/resolv.conf overrides pushed by `install/install_etc.sh`. Pushed to `/data/bin` by `install/*.sh`; see [device_layout.md](device_layout.md) for where each one lands.                                                                                                                                                                          |
+| `<component>/`             | One directory per cross-compiled deliverable (`dropbear`, `nshbox`, `kilo`, `ncdu`, `gzip`, `curl`, `nginx`, `7zip`), each with its own `README.md` for build specifics, status and, where it applies, a command reference. Most vendor an upstream tarball at build time and keep only build config here. `nshbox/src/` and `dropbear/` (`flythings-passwd-fallback.c`, `patches/`) are the two that carry project-maintained source. |
+| `mbedtls/`, `openssl/`     | Vendored TLS backends, built purely as the TLS library of `curl` and `nginx`. Not deliverables in their own right, except that `openssl/` also produces the `openssl` CLI as an optional compressed-on-demand tool (see [device_layout.md](device_layout.md#deployment-modes)). The CA bundle comes from `build_ca_bundle.sh`, which uses the build container's own trust store, not these libraries.                                  |
+| `tc002-discover/`          | Host-side device-discovery tool. Never touches the device and is not part of the device build; see its `README.md` for why it needs a separate Alpine container.                                                                                                                                                                                                                                                                       |
+| `docs/`                    | Project documentation; see "Quick links" in the root [README.md](../README.md).                                                                                                                                                                                                                                                                                                                                                        |
+| `config/`                  | Operator-supplied device configuration: `tc002-tools.conf` (gitignored, never committed) and `tc002-tools.conf.example`, the tracked template.                                                                                                                                                                                                                                                                                         |
+| `tests/`                   | `test_build_artifacts.sh` (run by `verify.sh`), `test_device_access.sh` (against a real device), `nshbox/` (the C++ functional test suite run by `test_nshbox.sh`, in its own container) and `nginx/` (the on-device nginx test; config, page, certificate maker and `run_test.sh`, run from the host).                                                                                                                                |
+| `dist/`                    | Build output: binaries, checksums, `manifest-*.json`. Entirely gitignored, regenerated by `./build_all.sh`.                                                                                                                                                                                                                                                                                                                            |
 
 **Deliverables vs. build support:** the on-device deliverables are exactly
 the tools listed in device_layout.md's deployment-mode table (dropbear and
