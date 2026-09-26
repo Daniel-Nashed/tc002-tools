@@ -186,6 +186,7 @@ manual - run only after confirming SSH works, from the device itself - see
 - [docs/platform.md](docs/platform.md) — the TC002/FlyThings device itself: how it differs from the TC001, and what `adbd` is and why it matters
 - [docs/build_platform.md](docs/build_platform.md) — the Alpine/musl ARM cross-build container and how to build
 - [docs/musl_migration.md](docs/musl_migration.md) — what changed in the move to static musl in one Alpine container, and how the build works now
+- [docs/releasing.md](docs/releasing.md) — how a release is made and what is attached to it
 - [docs/dropbear.md](docs/dropbear.md) — the Dropbear build, its patch, and why
 - [docs/device_layout.md](docs/device_layout.md) — the on-device filesystem layout this project uses
 - [docs/manual_rollout.md](docs/manual_rollout.md) — step-by-step provisioning on a single device

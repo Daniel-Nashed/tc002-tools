@@ -5,12 +5,13 @@
 #
 # The image comes from image.yml (built once per set of inputs, then only
 # pulled), so this workflow takes minutes, not an hour.
-# Started manually from the Actions tab for now (Run workflow); it is not bound
-# to pushes, tags or releases.
+# Started manually from the Actions tab (Run workflow), and called by release.yml,
+# which attaches the result to a release. Not bound to pushes or tags.
 name: Build
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   image:
@@ -30,6 +31,23 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # the manifests record the git commit
+
+      - name: Runner information
+        shell: bash
+        run: |
+          {
+            echo "### Runner"
+            echo '```'
+            echo "cpus:    $(nproc)  ($(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | sed -n '1p'))"
+            echo "arch:    $(uname -m)   kernel: $(uname -r)"
+            echo "memory:  $(free -h | sed -n 's/^Mem:[[:space:]]*\([^ ]*\).*/\1/p') total"
+            echo "os:      $(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | tr -d '"')"
+            echo "image:   ${ImageOS:-?} ${ImageVersion:-?}"
+            echo "docker:  $(docker --version)"
+            echo "disk:"
+            df -h / /var/lib/docker 2>/dev/null
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Free disk space
         run: |

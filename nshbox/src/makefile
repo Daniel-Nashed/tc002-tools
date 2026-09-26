@@ -55,7 +55,7 @@ endif
 
 all: $(TARGET)
 
-$(TARGET): $(SRC)
+$(TARGET): $(SRC) version.h
 	$(CC) $(CFLAGS) $(SRC) $(LDFLAGS) -o $@
 
 install: $(TARGET)

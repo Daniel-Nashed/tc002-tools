@@ -29,6 +29,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Runner information
+        shell: bash
+        run: |
+          {
+            echo "### Runner"
+            echo '```'
+            echo "cpus:    $(nproc)  ($(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | sed -n '1p'))"
+            echo "arch:    $(uname -m)   kernel: $(uname -r)"
+            echo "memory:  $(free -h | sed -n 's/^Mem:[[:space:]]*\([^ ]*\).*/\1/p') total"
+            echo "os:      $(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | tr -d '"')"
+            echo "image:   ${ImageOS:-?} ${ImageVersion:-?}"
+            echo "docker:  $(docker --version)"
+            echo "disk:"
+            df -h / /var/lib/docker 2>/dev/null
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Work out the image name and tag
         id: meta
         shell: bash

@@ -107,7 +107,8 @@
 #include <netdb.h>
 
 
-#define NSHBOX_VERSION    "0.6"
+/* NSHBOX_VERSION: the single source of truth for the version (also the release version) */
+#include "version.h"
 
 /* Shown after the version, so a "command not found" for sha256sum etc. is
  * explained by the banner instead of looking like a bug. */

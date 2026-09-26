@@ -1,0 +1,65 @@
+# Copyright (c) 2026 Daniel Nashed / NashCom
+# SPDX-License-Identifier: Apache-2.0
+
+# Builds the core deliverables and attaches them to a GitHub release, the same way
+# nshgeoip and nshmqtt do: run ./push-release.sh (it tags vX.Y.Z from
+# nshbox/src/version.h), then publish a release for that tag on GitHub. This
+# workflow runs when the release is published or edited. It reads the version from
+# nshbox/src/version.h (not version.txt), refuses a release whose tag does not
+# match it, builds in the prebuilt ARM image (build.yml), and uploads the files
+# that create_release_taz.sh puts in release/.
+name: Release
+
+on:
+  release:
+    types: [published, edited]
+
+jobs:
+  build:
+    name: Build
+    permissions:
+      contents: read
+      packages: write   # build.yml builds and pushes the build image if it does not exist yet
+    uses: ./.github/workflows/build.yml
+
+  release:
+    name: Upload release assets
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to upload release assets
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Read version
+        run: |
+          VERSION=$(sed -n 's/.*NSHBOX_VERSION "\(.*\)".*/\1/p' nshbox/src/version.h)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "nshbox/src/version.h: $VERSION, release tag: ${{ github.event.release.tag_name }}"
+
+      - name: The release tag must match the version
+        run: |
+          if [ "${{ github.event.release.tag_name }}" != "v${VERSION}" ]; then
+            echo "Release tag ${{ github.event.release.tag_name }} does not match nshbox/src/version.h (v${VERSION})." >&2
+            echo "Run ./push-release.sh, or fix the version, before publishing the release." >&2
+            exit 1
+          fi
+
+      - name: Download the build
+        uses: actions/download-artifact@v8
+        with:
+          name: tc002-tools-dist
+          path: dist
+
+      - name: Collect the release files
+        run: ./create_release_taz.sh
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

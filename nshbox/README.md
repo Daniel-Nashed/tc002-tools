@@ -146,7 +146,7 @@ independently rather than sharing a flag whose meaning would subtly differ betwe
 
 ```text
 
-nshbox 0.6
+nshbox 0.9.0
 
 System:        Linux
 Node:          flythings

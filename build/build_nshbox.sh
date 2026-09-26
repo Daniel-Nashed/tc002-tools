@@ -87,7 +87,7 @@ main()
   log_deliverable "${DIST_DIR}/nshbox"
 
   local nshbox_version
-  nshbox_version="$(grep -oE 'NSHBOX_VERSION\s+"[^"]+"' "${NSHBOX_SRC_DIR}/nshbox.c" | grep -oE '"[^"]+"' | tr -d '"')"
+  nshbox_version="$(grep -oE 'NSHBOX_VERSION\s+"[^"]+"' "${NSHBOX_SRC_DIR}/version.h" | grep -oE '"[^"]+"' | tr -d '"')"
   log_success "nshbox" "$nshbox_version"
 
   write_manifest
