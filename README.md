@@ -116,6 +116,16 @@ reports the device's free memory before and after. See [tests/nginx/README.md](t
 
 ## Deploying
 
+Without building anything - pull the binaries of the latest release, then deploy them (no Docker, no compiler; give
+the device address, since a release does not include the discovery tool yet):
+
+```sh
+./tc002_setup.sh --release --ip 192.168.1.50
+```
+
+See [docs/releasing.md](docs/releasing.md) for what `--release` pulls and how it is verified. Or, after building
+yourself:
+
 ```sh
 ./tc002_setup.sh
 ```

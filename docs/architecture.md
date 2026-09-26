@@ -24,6 +24,7 @@ Where each script runs: **host** is your own machine, **container** is one of th
 | `test_build_nshbox_native.sh` | host, then a native container   | Builds nshbox for this host's platform into `dist/amd64/` or `dist/arm64/` and optionally runs it. Dev only, never deployed.                                                                       |
 | `push-release.sh`             | host                            | Writes `version.txt` from `nshbox/src/version.h`, then tags and pushes `v<version>`. See [releasing.md](releasing.md).                                                                             |
 | `create_release_taz.sh`       | host                            | Collects the core files from `dist/` into `release/` for a GitHub release, with a `.sha256` per file and one bundle.                                                                               |
+| `pull-release.sh`             | host                            | Downloads a GitHub release into `dist/` and verifies it, so it can be deployed without building. `tc002_setup.sh --release` runs it first. See [releasing.md](releasing.md).                       |
 
 ### Build (`build/`)
 
