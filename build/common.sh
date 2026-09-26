@@ -218,7 +218,11 @@ print_build_summary()
 
 project_git_commit()
 {
-  if git -C "$REPO_ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
+  # Set by the docker-*/run.sh scripts, which ask git on the host: inside a
+  # container git refuses the mounted repository (dubious ownership).
+  if [ -n "${TC002_GIT_COMMIT:-}" ]; then
+    echo "$TC002_GIT_COMMIT"
+  elif git -C "$REPO_ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
     git -C "$REPO_ROOT" rev-parse --short HEAD
   else
     echo "unknown"

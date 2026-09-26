@@ -29,8 +29,13 @@ docker build --build-arg ALPINE_VERSION="$ALPINE_VERSION" -t "$IMAGE" "$SCRIPT_D
 CONTAINER_LABEL="$(printf '%s' "$(basename "${1:-shell}" .sh)" | tr -c 'A-Za-z0-9_.-' '_')"
 CONTAINER_NAME="${IMAGE}-${CONTAINER_LABEL}-$$"
 
+# The commit is asked on the host: inside the container git refuses the mounted
+# repository ("dubious ownership"), so the manifests would say "unknown".
+# describe --always --dirty gives the short hash, plus -dirty for uncommitted changes.
+TC002_GIT_COMMIT="$(git -C "$REPO_ROOT" describe --always --dirty 2>/dev/null || echo unknown)"
+
 if [ $# -eq 0 ]; then
-  docker run --rm -it --name "$CONTAINER_NAME" -v "${REPO_ROOT}:/work" -w /work "$IMAGE"
+  docker run --rm -it --name "$CONTAINER_NAME" -e TC002_GIT_COMMIT="$TC002_GIT_COMMIT" -v "${REPO_ROOT}:/work" -w /work "$IMAGE"
 else
-  docker run --rm --name "$CONTAINER_NAME" -v "${REPO_ROOT}:/work" -w /work "$IMAGE" "$@"
+  docker run --rm --name "$CONTAINER_NAME" -e TC002_GIT_COMMIT="$TC002_GIT_COMMIT" -v "${REPO_ROOT}:/work" -w /work "$IMAGE" "$@"
 fi
