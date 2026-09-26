@@ -16,12 +16,8 @@ Same pattern as every other top-level `build_*.sh` wrapper - it calls `run.sh` i
 Docker exactly the way [build/docker-alpine-arm/run.sh](../docker-alpine-arm/run.sh) does for the ARM image, just against
 this separate one.
 
-## Manual equivalent, if you need it
-
-```sh
-docker build -t tc002-tools-build-alpine build/docker-alpine
-docker run --rm -v "$(pwd):/work" -w /work tc002-tools-build-alpine build/build_tc002-discover.sh
-```
+The Alpine version comes from `ALPINE_VERSION` in [../versions.env](../versions.env), the same one as for the ARM image,
+and `run.sh` passes it to the image build; the Dockerfile has no default for it.
 
 ## Why a separate image, not one flag on the existing one
 

@@ -16,20 +16,20 @@ source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
 #
-# 4.0.2 - this went 4.0.2 -> 3.5.8 (LTS) -> back to 4.0.2 as the real
+# 4.0 - this went 4.0 -> 3.5 (LTS) -> back to 4.0 as the real
 # story got sorted out, so the history is worth recording rather than
 # hiding: a real arm-linux-gnueabihf nginx build against this project's
-# very first OpenSSL 4.0.2 build failed to link, with "undefined
+# very first OpenSSL 4.0 build failed to link, with "undefined
 # reference" errors for ENGINE_by_id, SSL_get_peer_certificate, and
 # EVP_CIPHER_iv_length. That looked at the time like a genuine, total API
 # removal (OpenSSL's own NEWS.md for 4.0.0 does say "Removed support for
-# engines"), so this was pinned back to 3.5.8 LTS instead - the same
+# engines"), so this was pinned back to 3.5 LTS instead - the same
 # risk-avoidance judgment call already made for mbedTLS, just applied
 # after a failure instead of by inspection first.
 #
 # Deeper investigation (2026-09-13) found that conclusion was only right
 # for ENGINE, not for the other two: a clean-room cross-compile of
-# OpenSSL 4.0.2 in an independent environment, and a direct compile-time
+# OpenSSL 4.0 in an independent environment, and a direct compile-time
 # macro test against its real generated headers, confirmed
 # SSL_get_peer_certificate and EVP_CIPHER_iv_length are still fully
 # functional compile-time macro aliases for
@@ -48,23 +48,22 @@ source "${SCRIPT_DIR}/common.sh"
 # (its "engine" directive is wrapped in "#ifndef OPENSSL_NO_ENGINE" in
 # nginx's own real source).
 #
-# Back on 4.0.2 now on that basis, but this has NOT yet been confirmed
+# Back on 4.0 now on that basis, but this has NOT yet been confirmed
 # against a real arm-linux-gnueabihf nginx build with qemu actually
 # executing the result (the clean-room test above could cross-compile
 # and inspect symbols, but couldn't run nginx's own configure-time
 # compiler check without a working qemu-arm in that environment) - only
 # do real device/TLS-handshake testing on top of this once that end-to-
 # end link has actually been confirmed once.
-OPENSSL_VERSION="4.0.2"
+# Version and SHA-256: OPENSSL_VERSION and OPENSSL_SHA256 in build/versions.env.
 OPENSSL_TARBALL="openssl-${OPENSSL_VERSION}.tar.gz"
 OPENSSL_URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/${OPENSSL_TARBALL}"
 
 # Verified 2026-09-12 by downloading the release tarball directly from
 # its GitHub release and computing its SHA-256, which matches the
 # checksum published alongside it at the same release
-# (openssl-4.0.2.tar.gz.sha256). Re-verify independently before relying
+# (openssl-<version>.tar.gz.sha256). Re-verify independently before relying
 # on this for anything security-sensitive.
-OPENSSL_SHA256="736b467530f916737b7031310ccb21d8218c6229e61e8e160cd1d3458cd543a8"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"

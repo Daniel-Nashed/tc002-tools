@@ -23,7 +23,7 @@ musl has neither problem. Buster was also end of life (`archive.debian.org`).
 ## What it is now
 
 - **One image for all device components:** [build/docker-alpine-arm](../build/docker-alpine-arm/README.md), a pinned
-  Alpine base with an `arm-linux-musleabihf` cross compiler (GCC 9.4, built from source with musl-cross-make at one pinned
+  Alpine base with an `arm-linux-musleabihf` cross compiler (GCC, built from source with musl-cross-make at one pinned
   commit, since Alpine has no such package) and an ARM sysroot of Alpine's own armv7 static libraries (ncurses, zlib).
   Docker's layer cache makes everything after the first build instant.
 - **Static binaries only:** `readelf -d` shows no NEEDED entry and no program interpreter. `build/common.sh`'s
@@ -74,7 +74,7 @@ Stripped sizes of the current artifacts (`dist/`):
   1.3 with AES-GCM, ChaCha20 and RSA/ECDSA remain. See [../openssl/README.md](../openssl/README.md).
 - **nginx:** cross-building runs small ARM test programs during `configure`; `build/qemu-cc-wrapper.sh` runs them under
   `qemu-arm` (with a private root providing the musl loader). No PCRE, so no `return`/`if`/`set`/`rewrite`; the `map`
-  module is kept (exact and wildcard names only) and needs `user root;`. nginx is pinned to 1.31.6.
+  module is kept (exact and wildcard names only) and needs `user root;`. The versions of nginx and everything else are in [build_platform.md](build_platform.md#toolchain-and-versions).
 - **7-Zip and other components** got their own trimming (RAR off, `-Os`, `--gc-sections`): 7zz went from 2.27 MB to 1.67 MB.
 - **Build tooling:** every build script prints its elapsed time; `build/build_all_musl.sh` is the in-container driver
   behind the root `./build_all.sh`; the root `./build_*.sh` wrappers each run one component in the container. Bash traps

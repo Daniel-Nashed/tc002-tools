@@ -1,3 +1,6 @@
+# check=skip=InvalidDefaultArgInFrom
+# (The base image version has no default on purpose: build/versions.env is the only place it is set,
+# and run.sh passes it as a build argument. The check would warn about the empty default.)
 # Native (not cross-compile) build platform for the nshbox functional test
 # harness (tests/nshbox/) - the one component in this project that neither
 # targets the TC002 nor talks to a real device at all. Every device
@@ -16,11 +19,11 @@
 # distinction worth keeping sharp (see build/docker-alpine/README.md's
 # "why a separate image, not one flag on the existing one").
 #
-# Build:  docker build -t tc002-tools-test-ubuntu build/docker-ubuntu
-# Use:    docker run --rm -v "$(pwd):/work" -w /work tc002-tools-test-ubuntu \
-#             build/test_nshbox_functional.sh
+# Built and run by run.sh in this directory, which passes UBUNTU_VERSION from
+# build/versions.env (no default here on purpose: one place for every version).
 
-FROM ubuntu:26.04
+ARG UBUNTU_VERSION
+FROM ubuntu:${UBUNTU_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
 

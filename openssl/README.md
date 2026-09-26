@@ -19,9 +19,9 @@ license (Apache License 2.0). No source is vendored into this repository; `build
 pinned release tarball fresh at build time, the same way every other `build/` script here handles its upstream
 source.
 
-## 4.0.2 - a pin that bounced to 3.5.8 LTS and back, on real evidence each time
+## 4.0 - a pin that bounced to 3.5 LTS and back, on real evidence each time
 
-This project's very first real `arm-linux-gnueabihf` build of nginx against OpenSSL 4.0.2 failed to link, with
+This project's very first real `arm-linux-gnueabihf` build of nginx against OpenSSL 4.0 failed to link, with
 "undefined reference" errors for `ENGINE_by_id`, `SSL_get_peer_certificate`, and `EVP_CIPHER_iv_length`. At the
 time that looked like a total API removal - OpenSSL's own `NEWS.md` for the 4.0.0 release does say plainly "Removed
 support for engines" - so this was pinned back to OpenSSL's 3.5 LTS line instead, the same risk-avoidance judgment
@@ -29,7 +29,7 @@ call already made for [mbedTLS](../mbedtls/README.md) (an unproven, very-new maj
 consumer), just applied here after a failure rather than by inspection first.
 
 Deeper investigation (2026-09-13) found that conclusion was only right for one of the three symbols. A clean-room
-cross-compile of OpenSSL 4.0.2 in an independent environment, followed by a direct compile-time test against its
+cross-compile of OpenSSL 4.0 in an independent environment, followed by a direct compile-time test against its
 real generated headers, confirmed:
 
 - **`ENGINE_by_id` and friends** - genuinely non-functional by default in 4.0. The declarations are kept for source
@@ -38,7 +38,7 @@ real generated headers, confirmed:
   diagnosis was correct.
 - **`SSL_get_peer_certificate` and `EVP_CIPHER_iv_length`** - still fully functional compile-time macro aliases for
   `SSL_get1_peer_certificate`/`EVP_CIPHER_get_iv_length` (both confirmed present as real, linkable symbols via
-  `nm`), exactly like in 3.x. A minimal test file including `<openssl/ssl.h>` against the real generated 4.0.2
+  `nm`), exactly like in 3.x. A minimal test file including `<openssl/ssl.h>` against the real generated 4.0
   headers confirmed the macro is defined and active. This part of the original diagnosis was wrong.
 
 The most likely explanation for the original link failure on these two: this project's own `dist/openssl/sdk`
@@ -46,7 +46,7 @@ build was corrupted or incomplete at the time, a real risk given the extraction 
 this session's build pipeline hit around the same time (see `install_artifacts()`'s own comments) - not a genuine
 OpenSSL 4.0 incompatibility for those two symbols.
 
-Back on 4.0.2 now on that corrected basis. The `no-engine` build option (added below) is what actually matters for
+Back on 4.0 now on that corrected basis. The `no-engine` build option (added below) is what actually matters for
 the genuinely-removed ENGINE API: nginx's own `#ifndef OPENSSL_NO_ENGINE` guard around its "engine" config
 directive (not something this project's nginx.conf needs) means building OpenSSL with `no-engine` makes nginx skip
 that code entirely at compile time, no nginx patch required. Nothing here is pinned forever regardless - the whole
@@ -184,7 +184,7 @@ read from `--help`):
 - `no-engine`: nginx never uses the ENGINE API unless its own `engine` config directive is used, not something this
   project needs - confirmed directly in nginx's real source that the whole directive is wrapped in
   `#ifndef OPENSSL_NO_ENGINE`, so this makes nginx skip that code entirely at compile time, no patch needed. This
-  one matters more than a minimalism choice here - see "4.0.2 - a pin that bounced..." above for why ENGINE is
+  one matters more than a minimalism choice here - see "4.0 - a pin that bounced..." above for why ENGINE is
   genuinely non-functional in this OpenSSL version regardless.
 
 Verified end to end: `Configure` succeeds, `make` produces real ARM static archives and a real ARM `openssl` binary with

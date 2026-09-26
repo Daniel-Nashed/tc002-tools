@@ -20,9 +20,10 @@ dynamic binaries is gone.
 ## What is in it
 
 Alpine does not package an ARM32 musl cross compiler, so the image builds one from source with
-[musl-cross-make](https://github.com/richfelker/musl-cross-make), pinned to one commit (`MCM_COMMIT` in the
-[Dockerfile](Dockerfile)); musl-cross-make checks the SHA-1 of every source tarball it downloads. Target
-`arm-linux-musleabihf`, ARMv7-A / VFPv3-D16 / hard float - the same defaults the old Buster toolchain had. The first
+[musl-cross-make](https://github.com/richfelker/musl-cross-make), pinned to one commit (`MCM_COMMIT` in
+[../versions.env](../versions.env), passed to the image build by `run.sh` together with `ALPINE_VERSION`);
+musl-cross-make checks the SHA-1 of every source tarball it downloads. Target
+`arm-linux-musleabihf`, ARMv7-A / VFPv3-D16 / hard float. The first
 `docker build` compiles gcc and takes a long while; after that it is cached.
 
 ## Using it

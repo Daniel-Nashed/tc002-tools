@@ -64,7 +64,7 @@ Linux assembler code only covers x86/x86-64 (MASM syntax) and arm64 (GNU assembl
 plain C/C++ build on this target regardless.
 
 `CFLAGS_WARN` is picked by 7-Zip's own `warn_gcc.mak` from the compiler version (several sequential reassignments, one
-per GCC version, the last one winning). The musl toolchain's GCC is 9.4.0, so the default set applies and
+per GCC version, the last one winning). The musl toolchain's GCC is new enough (9 or later), so the default set applies and
 `build/build_7zip.sh` does not override it. (An older, since removed GCC 8 toolchain needed an override because a warning
 flag only exists from GCC 9; if a newer 7-Zip ever adds a flag this GCC does not know, the build fails with
 `unrecognized command line option` - override `CFLAGS_WARN` then.)

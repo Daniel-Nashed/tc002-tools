@@ -25,18 +25,19 @@ Where each script runs: **host** is your own machine, **container** is one of th
 
 ### Build (`build/`)
 
-| Script                        | Runs on          | What it does                                                                                                             |
-| ----------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `build_all_musl.sh`           | container        | The in-container driver behind `build_all.sh`: builds the components in order, handles the flags and prints the summary. |
-| `build_<name>.sh`             | container        | The real build of each component (download, checksum check, cross-compile, static check, strip, manifest).               |
-| `build_tc002-discover.sh`     | native container | Static native build of the discovery tool.                                                                               |
-| `common.sh`                   | container        | Shared variables and helpers (toolchain, `log`, `die`, `verify_static_binary`, timing). Sourced, never run.              |
-| `qemu-cc-wrapper.sh`          | container        | Lets nginx's `configure` run its ARM test programs under `qemu-arm`.                                                     |
-| `docker-alpine-arm/run.sh`    | host             | Builds the ARM musl image if needed and runs a command in it with the repository mounted.                                |
-| `docker-alpine/run.sh`        | host             | The same for the native Alpine image.                                                                                    |
-| `docker-ubuntu/run.sh`        | host             | The same for the Ubuntu test image.                                                                                      |
-| `test_build_nshbox_native.sh` | native container | The build behind `test_build_nshbox_native.sh` above.                                                                    |
-| `test_nshbox_functional.sh`   | Ubuntu container | The build and run behind `test_nshbox.sh`.                                                                               |
+| Script                        | Runs on          | What it does                                                                                                                                                        |
+| ----------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build_all_musl.sh`           | container        | The in-container driver behind `build_all.sh`: builds the components in order, handles the flags and prints the summary.                                            |
+| `build_<name>.sh`             | container        | The real build of each component (download, checksum check, cross-compile, static check, strip, manifest).                                                          |
+| `build_tc002-discover.sh`     | native container | Static native build of the discovery tool.                                                                                                                          |
+| `common.sh`                   | container        | Shared variables and helpers (toolchain, `log`, `die`, `verify_static_binary`, timing). Sourced, never run.                                                         |
+| `versions.env`                | host, container  | Every pinned version and SHA-256 (base images, compiler, upstream sources). Sourced by `common.sh`; the `run.sh` scripts pass the image versions to `docker build`. |
+| `qemu-cc-wrapper.sh`          | container        | Lets nginx's `configure` run its ARM test programs under `qemu-arm`.                                                                                                |
+| `docker-alpine-arm/run.sh`    | host             | Builds the ARM musl image if needed and runs a command in it with the repository mounted.                                                                           |
+| `docker-alpine/run.sh`        | host             | The same for the native Alpine image.                                                                                                                               |
+| `docker-ubuntu/run.sh`        | host             | The same for the Ubuntu test image.                                                                                                                                 |
+| `test_build_nshbox_native.sh` | native container | The build behind `test_build_nshbox_native.sh` above.                                                                                                               |
+| `test_nshbox_functional.sh`   | Ubuntu container | The build and run behind `test_nshbox.sh`.                                                                                                                          |
 
 ### Install (`install/`, run over ADB from the host)
 

@@ -32,8 +32,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
-SEVENZIP_VERSION="26.03"
-SEVENZIP_TARBALL="7z2603-src.tar.xz"
+# Version and SHA-256: SEVENZIP_VERSION and SEVENZIP_SHA256 in build/versions.env.
+# 7-Zip's tarball name is the version without the dot (a version like "12.34" is "7z1234-src.tar.xz").
+SEVENZIP_TARBALL="7z${SEVENZIP_VERSION//./}-src.tar.xz"
 SEVENZIP_URL="https://github.com/ip7z/7zip/releases/download/${SEVENZIP_VERSION}/${SEVENZIP_TARBALL}"
 
 # Verified 2026-09-13 by downloading the release tarball directly from
@@ -44,7 +45,6 @@ SEVENZIP_URL="https://github.com/ip7z/7zip/releases/download/${SEVENZIP_VERSION}
 # alongside it, the same situation this project already accepted for
 # nginx and gzip. Re-verify independently before relying on this for
 # anything security-sensitive.
-SEVENZIP_SHA256="9cbde5099c6deb73691b0579063da5827522ccbbcba3f0020fd04e8c8c16c0d4"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
@@ -90,7 +90,7 @@ extract_source()
 
   # 7-Zip's own release tarball has no single top-level directory (it
   # extracts Asm/, C/, CPP/, DOC/ etc. directly at the archive root) -
-  # confirmed directly against the real 26.03 tarball, unlike every
+  # confirmed directly against the real tarball, unlike every
   # other component here that extracts into its own "name-version/"
   # directory. Extracting straight into a version-named SRC_DIR this
   # script controls keeps the same layout convention as every other
@@ -127,7 +127,7 @@ configure_and_build()
   # compressed copy inside on-demand.tar.gz.
   #
   # CFLAGS_WARN is not overridden: 7-Zip's warn_gcc.mak picks its
-  # warning-flag set by compiler version, and this toolchain's GCC is 9.4.0,
+  # warning-flag set by compiler version, and this toolchain's GCC is 9 or newer,
   # so the default set applies. If a newer
   # 7-Zip ever adds a warning flag this GCC does not know, the build fails
   # with "unrecognized command line option" - override CFLAGS_WARN then.

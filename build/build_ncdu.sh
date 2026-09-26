@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
-NCDU_VERSION="1.22"
+# Version and SHA-256: NCDU_VERSION and NCDU_SHA256 in build/versions.env.
 NCDU_TARBALL="ncdu-${NCDU_VERSION}.tar.gz"
 NCDU_URL="https://dev.yorhel.nl/download/${NCDU_TARBALL}"
 
@@ -25,7 +25,6 @@ NCDU_URL="https://dev.yorhel.nl/download/${NCDU_TARBALL}"
 # the plain yorhel.nl/download/... URL some search results point at,
 # which 404s; only caught that by actually downloading it. Re-verify
 # independently before relying on this for anything security-sensitive.
-NCDU_SHA256="0ad6c096dc04d5120581104760c01b8f4e97d4191d6c9ef79654fa3c691a176b"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
@@ -92,7 +91,7 @@ configure_and_build()
 
   # Unlike Dropbear's configure.ac, ncdu's calls only AC_INIT/AC_PROG_CC -
   # never AC_CANONICAL_HOST - so it never prints a "checking host system
-  # type... arm..." banner (verified directly against the real 1.22
+  # type... arm..." banner (verified directly against the real
   # configure.ac and by diffing a native vs. a --host=<cross triple>
   # configure run: that banner is absent from both). What --host actually
   # does here, verified the same way, is make autoconf's standard

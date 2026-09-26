@@ -22,7 +22,7 @@ adding the risky thing" approach. TLS is the tracked next step that was always i
 
 `build/build_curl.sh` now builds with `--with-mbedtls=<path>`, pointing at [build_mbedtls.sh](../build/build_mbedtls.sh)'s
 own output - see that script for why mbedTLS is vendored and cross-built here rather than using a distribution's own
-`libmbedtls-dev:armhf` package (short version: it is the 2.16.x line from ~2019, likely with known CVEs patched
+`libmbedtls-dev:armhf` package (short version: it is an older release line from ~2019, likely with known CVEs patched
 upstream since; this project instead pins a *current* mbedTLS release, same "minimal, current" bar already set for
 [nginx](../nginx/README.md)). curl links against mbedTLS's static archives only - `build_mbedtls.sh` never builds a
 shared `libmbedtls*.so` in the first place, so there is no dynamic-vs-static ambiguity for curl's link step to get

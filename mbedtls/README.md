@@ -13,22 +13,22 @@ every other `build/` script here handles its upstream source.
 
 ## Why vendor and cross-build this instead of using a distribution package
 
-A distribution's ARM package of mbedTLS is typically an older release line (the old Debian Buster one was 2.16.x, from
-around 2019) - and for a *TLS* library specifically (unlike zlib or ncursesw) that vintage almost certainly has real
+A distribution's ARM package of mbedTLS is typically an older release line (from around 2019 for the old Debian
+package) - and for a *TLS* library specifically (unlike zlib or ncursesw) that vintage almost certainly has real
 CVEs patched upstream since. It would also have to be a static library built for the musl sysroot. So mbedTLS is
 vendored and cross-built fresh instead, at a current pinned release, the same "minimal, current" bar already set for
 [nginx](../nginx/README.md).
 
-## 3.6.7, not the newer 4.2.0
+## 3.6, not the newer 4.2
 
-Both are actively-maintained, genuinely current releases as of 2026-09-12 (4.2.0 and 3.6.7 were both released within
-months of each other). curl 8.22.0's own `lib/vtls/mbedtls.c` already has explicit
+Both are actively-maintained, genuinely current releases as of 2026-09-12 (4.2 and 3.6 were both released within
+months of each other). curl's own `lib/vtls/mbedtls.c` already has explicit
 `#if MBEDTLS_VERSION_NUMBER >= 0x04000000` branches, so it does support 4.x, not just 3.x. The choice came down to
-something else, found by actually downloading and inspecting the real 4.2.0 release tarball first (not assumed from
+something else, found by actually downloading and inspecting the real 4.2 release tarball first (not assumed from
 its version number alone): mbedTLS 4.x split its crypto implementation out into a separate "TF-PSA-Crypto" project,
 bundled in the release tarball as its own large, independent build system (its own `CMakeLists.txt`, its own
 `crypto-library.make` pulled into `library/Makefile`) - a substantially bigger and more recently-introduced moving
-part than this project's "boring, well-trodden" bar for a security-sensitive TLS library. 3.6.7 has none of that: a
+part than this project's "boring, well-trodden" bar for a security-sensitive TLS library. 3.6 has none of that: a
 single self-contained tree, a plain `library/Makefile` with no extra submodule build system - the same shape
 virtually every other project cross-compiling mbedTLS via plain `make` today is actually using.
 
@@ -77,6 +77,6 @@ every other component here, mainly so it can be built and inspected without also
 ## Status
 
 Configure-free cross-compile approach and the static-only build were worked out and confirmed by actually
-downloading, extracting, and reading both the 4.2.0 and 3.6.7 release tarballs, and curl's own `vtls/mbedtls.c`
+downloading, extracting, and reading both the 4.2 and 3.6 release tarballs, and curl's own `vtls/mbedtls.c`
 source, directly (2026-09-12) - not assumed from documentation. The actual `arm-linux-gnueabihf` cross-build inside
 the real container, and curl linking against the result, have not been run yet.

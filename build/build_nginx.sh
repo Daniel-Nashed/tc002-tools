@@ -17,26 +17,25 @@ source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
 #
-# 1.31.6 (nginx.org's current "Mainline" label; 1.31.5 before, bumped 2026-09-25), not the 1.30.x "Stable"
+# 1.31 (nginx.org's current "Mainline" label; 1.31 before, bumped 2026-09-25), not the 1.30.x "Stable"
 # line this project first pinned - a deliberate, explicit exception to
 # this project's usual stable-over-bleeding-edge default (Dropbear,
-# curl), made once OpenSSL was bumped to 4.0.2 (see build_openssl.sh):
+# curl), made once OpenSSL was bumped to 4.0 (see build_openssl.sh):
 # both are genuinely the latest available release of each project as of
 # 2026-09-13, checked directly against nginx.org's own download page and
 # OpenSSL's real GitHub releases (4.1.0 exists only as an alpha).
-NGINX_VERSION="1.31.6"
+# Version and SHA-256: NGINX_VERSION and NGINX_SHA256 in build/versions.env.
 NGINX_TARBALL="nginx-${NGINX_VERSION}.tar.gz"
 NGINX_URL="https://nginx.org/download/${NGINX_TARBALL}"
 
 # Verified 2026-09-25 by downloading the release tarball directly from
 # nginx.org and computing its SHA-256, and by checking its detached PGP
-# signature (nginx-1.31.6.tar.gz.asc): "Good signature" from Sergey
+# signature (nginx-<version>.tar.gz.asc): "Good signature" from Sergey
 # Kandaurov <s.kandaurov@f5.com>, primary key fingerprint
 # D678 6CE3 03D9 A902 2998 DC6C C846 4D54 9AF7 5C0A (key file taken from
 # nginx.org/keys/pluknet.key - compare that fingerprint with the one on
 # nginx.org/en/pgp_keys.html yourself). Re-verify independently before
 # relying on this for anything security-sensitive.
-NGINX_SHA256="974ed5298a5e398e008704ed5db284e655fc270c596493dbccada452448fc9f1"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"

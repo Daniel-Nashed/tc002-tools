@@ -33,12 +33,8 @@ docker rmi tc002-tools-test-ubuntu
 
 The next `./test_nshbox.sh` run just rebuilds it from scratch.
 
-## Manual equivalent, if you need it
-
-```sh
-docker build -t tc002-tools-test-ubuntu build/docker-ubuntu
-docker run --rm -v "$(pwd):/work" -w /work tc002-tools-test-ubuntu build/test_nshbox_functional.sh
-```
+The Ubuntu version comes from `UBUNTU_VERSION` in [../versions.env](../versions.env), and `run.sh` passes it to the image
+build; the Dockerfile has no default for it.
 
 ## Why a separate image, and why Ubuntu, not Alpine
 

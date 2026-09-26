@@ -13,7 +13,7 @@ ncdu has two actively maintained branches:
 - **1.x** ("LTS") - the original C implementation, using `ncurses`.
 - **2.x** - a rewrite in [Zig](https://ziglang.org/), with no `ncurses` dependency.
 
-This project vendors **1.x** (pinned to 1.22 in [../build/build_ncdu.sh](../build/build_ncdu.sh)). Every other
+This project vendors **1.x** (the exact version is set in [../build/build_ncdu.sh](../build/build_ncdu.sh)). Every other
 component here (Dropbear, `nshbox`, `kilo`) cross-compiles through the same single `gcc` toolchain (static musl);
 pulling in 2.x would mean standing up an entirely separate Zig cross-compiler toolchain just for this one tool, a
 much bigger addition to the build platform than anything else in this project. `ncurses` linking has its own
@@ -53,7 +53,7 @@ at all, and `verify_static_binary` checks that). The static ncurses comes from t
 (`/opt/sysroot`, Alpine's own armv7 `ncurses-dev`/`ncurses-static`/`ncurses-terminfo` packages unpacked with `apk
 --arch armv7 --root`), not from a package for the build host or a from-source build. `build_ncdu.sh` points the
 compiler, linker and pkg-config there, and adds `-ltinfo` only if the sysroot actually has `libtinfo.a`. Those
-packages follow Alpine's v3.22 repository rather than being pinned to exact versions. The terminfo entries are
+packages follow the image's Alpine release repository rather than being pinned to exact versions. The terminfo entries are
 copied from that sysroot too.
 
 Runs in that container like the other moved components - see

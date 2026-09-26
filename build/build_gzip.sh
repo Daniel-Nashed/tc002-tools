@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
-GZIP_VERSION="1.14"
+# Version and SHA-256: GZIP_VERSION and GZIP_SHA256 in build/versions.env.
 GZIP_TARBALL="gzip-${GZIP_VERSION}.tar.gz"
 GZIP_URL="https://ftp.gnu.org/gnu/gzip/${GZIP_TARBALL}"
 
@@ -26,7 +26,6 @@ GZIP_URL="https://ftp.gnu.org/gnu/gzip/${GZIP_TARBALL}"
 # (only a GPG .sig, not verified here), the same situation this project
 # already accepted for nginx (see build_nginx.sh). Re-verify
 # independently before relying on this for anything security-sensitive.
-GZIP_SHA256="613d6ea44f1248d7370c7ccdeee0dd0017a09e6c39de894b3c6f03f981191c6b"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"

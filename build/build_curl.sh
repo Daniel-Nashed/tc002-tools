@@ -10,14 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
-CURL_VERSION="8.22.0"
+# Version and SHA-256: CURL_VERSION and CURL_SHA256 in build/versions.env.
 CURL_TARBALL="curl-${CURL_VERSION}.tar.gz"
 CURL_URL="https://curl.se/download/${CURL_TARBALL}"
 
 # Verified 2026-09-12 by downloading the release tarball directly from
 # curl.se and computing its SHA-256. Re-verify independently before
 # relying on this for anything security-sensitive.
-CURL_SHA256="d54dd598bf05927a726deb38df31c6a255ba83ff1de57c5d1464dac3ed8f44a1"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"

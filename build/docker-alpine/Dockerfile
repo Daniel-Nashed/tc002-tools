@@ -1,3 +1,6 @@
+# check=skip=InvalidDefaultArgInFrom
+# (The base image version has no default on purpose: build/versions.env is the only place it is set,
+# and run.sh passes it as a build argument. The check would warn about the empty default.)
 # Native (not cross-compile) build platform for tc002-discover - the one
 # component in this project that is NOT a TC002 deliverable. Every other
 # build_*.sh here cross-compiles FOR the device (arm-linux-musleabihf, via
@@ -13,11 +16,11 @@
 # discipline elsewhere, even though this is a host tool, not a device
 # deliverable.
 #
-# Build:  docker build -t tc002-tools-build-alpine build/docker-alpine
-# Use:    docker run --rm -v "$(pwd):/work" -w /work tc002-tools-build-alpine \
-#             build/build_tc002-discover.sh
+# Built and run by run.sh in this directory, which passes ALPINE_VERSION from
+# build/versions.env (no default here on purpose: one place for every version).
 
-FROM alpine:3.22.4
+ARG ALPINE_VERSION
+FROM alpine:${ALPINE_VERSION}
 
 # build-base: gcc, musl-dev (headers + static libc.a), make, binutils -
 # everything "cc -Os -static -s" needs. bash: build_tc002-discover.sh

@@ -1,3 +1,6 @@
+# check=skip=InvalidDefaultArgInFrom
+# (The base image version has no default on purpose: build/versions.env is the only place it is set,
+# and run.sh passes it as a build argument. The check would warn about the empty default.)
 # ARM32 (arm-linux-musleabihf) cross-build platform on a current Alpine, for
 # STATIC musl binaries for the TC002 - the build image for every device
 # component. See README.md in this directory.
@@ -14,16 +17,15 @@
 # Target flags match what the device runs (Cortex-A7, ARM 32-bit hard-float
 # - see docs/platform.md): ARMv7-A, VFPv3-D16, hard float.
 #
-# Build:  docker build -t tc002-tools-build-musl build/docker-alpine-arm
 # Use:    build/docker-alpine-arm/run.sh build/build_all_musl.sh
+# run.sh builds the image and passes ALPINE_VERSION and MCM_COMMIT from
+# build/versions.env (no defaults here on purpose: one place for every version).
 
-FROM alpine:3.22.4
+ARG ALPINE_VERSION
+FROM alpine:${ALPINE_VERSION}
 
-# Latest musl-cross-make master when this was written (2026-09-25, its
-# 2026-06-16 commit "musl security patches" - CVE-2026-40200/CVE-2026-6042).
-# Check with: git ls-remote https://github.com/richfelker/musl-cross-make HEAD
-# Bumping this changes the compiler and musl versions; rebuild and retest.
-ARG MCM_COMMIT=227df8b99103f9c59f6570babf892978e293082f
+# musl-cross-make commit; it decides the GCC, musl and binutils versions.
+ARG MCM_COMMIT
 
 # build-base: the host compiler that builds the cross compiler.
 # git/wget/curl/ca-certificates: fetching musl-cross-make and its source
@@ -96,7 +98,7 @@ RUN set -eux; \
 # unpacked) - the same musl libc this toolchain targets, hard-float ARMv7 -
 # instead of compiling each library from source here. Signed by Alpine's own
 # keys. NOT pinned to exact package versions: they follow this Alpine
-# release's (v3.22) repository, so a rebuilt image can pick up a newer
+# release's repository, so a rebuilt image can pick up a newer
 # ncurses point release. pkgconf is the native tool that reads the .pc files
 # in that sysroot (build/build_ncdu.sh points it there).
 # qemu-arm: user-mode ARM emulation, used only by nginx's cross-build

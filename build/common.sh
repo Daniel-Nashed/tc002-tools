@@ -17,6 +17,10 @@ TARGET_CFLAGS=""
 TARGET_LDFLAGS_SIZE=""
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Every pinned version (base images, compiler, upstream sources and their
+# SHA-256) lives in build/versions.env - see the comment at the top of that file.
+source "$(dirname "${BASH_SOURCE[0]}")/versions.env"
 DIST_DIR="${REPO_ROOT}/dist"
 WORK_DIR="${REPO_ROOT}/build/work"
 

@@ -8,13 +8,13 @@ Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](..
 license (2-clause BSD). No source is vendored into this repository; `build/build_nginx.sh` downloads the pinned
 release tarball fresh at build time, the same way every other `build/` script here handles its upstream source.
 
-Pinned to nginx.org's **Mainline** branch (1.31.6, bumped from 1.31.5 on 2026-09-25), not **Stable** (1.30.4, this project's original pin here) - a
+Pinned to nginx.org's **Mainline** branch (the 1.31 line), not **Stable** (the 1.30 line this project first used) - a
 deliberate exception to this project's usual preference for stable over bleeding-edge releases (Dropbear, `curl`),
-made once [OpenSSL](../openssl/README.md) moved to 4.0.2: both are genuinely the latest available release of each
-project as of 2026-09-13, checked directly against nginx.org's own download page and OpenSSL's real GitHub
-releases. The original 1.30.4 pin is fully confirmed end to end on real hardware, including a real TLS 1.3
-handshake (2026-09-13, against OpenSSL 3.5.8) - see Status below for what is and isn't yet confirmed at this newer
-pin.
+made once [OpenSSL](../openssl/README.md) moved to the 4.0 line: both were the latest available release of each
+project when this was decided (2026-09-13), checked directly against nginx.org's own download page and OpenSSL's
+real GitHub releases. The exact versions are in the table in
+[../docs/build_platform.md](../docs/build_platform.md#toolchain-and-versions). See Status below for what is confirmed
+on the device.
 
 ## `--prefix=/data/nginx`
 
@@ -32,8 +32,8 @@ script wiring this up on the device yet (see Status below).
 nginx was first shipped with no TLS at all - `ngx_http_ssl_module` is opt-in in nginx (unlike curl, which
 auto-detects a backend by default), so it was simply never enabled, following the same "prove the simple thing
 works before adding the risky thing" approach used throughout this project. TLS is now added, against this
-project's own cross-built [OpenSSL](../openssl/README.md) - see that README for the full story: why 4.0.2 (after a
-detour through 3.5.8 LTS on a since-corrected diagnosis of a real build failure), and why this ended up
+project's own cross-built [OpenSSL](../openssl/README.md) - see that README for the full story: why 4.0 (after a
+detour through 3.5 LTS on a since-corrected diagnosis of a real build failure), and why this ended up
 **statically** linked after an earlier dynamic design ran into two real, on-device failures in a row (a
 `-Wl,-rpath` dance, then an actual `libatomic.so.1: cannot open shared object file`
 failure) - the same class of risk this project already avoids for curl's mbedTLS.
@@ -157,7 +157,7 @@ See [tests/nginx/README.md](../tests/nginx/README.md): a ready-made configuratio
 Built with the static musl toolchain and verified on the real device with [tests/nginx](../tests/nginx/README.md):
 `nginx -t`, plain HTTP, the `map` module, `stub_status`, and HTTPS forced to TLS 1.2 and to TLS 1.3 - once with an
 RSA and once with an ECDSA certificate - all pass, and the device's free memory afterwards is back where it started.
-The binary is about 3 MB (OpenSSL 4.0.2 statically linked with the trimmed feature set described in
+The binary is about 3 MB (OpenSSL statically linked with the trimmed feature set described in
 [../openssl/README.md](../openssl/README.md), zlib, no PCRE); the manifest `dist/manifest-nginx.json` records `"tls":
 "openssl-static"`, `"pcre": "none"`, `"zlib": "static"`, and `verify_artifact()` fails the build if the result is not
 fully static. Deployment is compressed-on-demand (`/data/bin/nginx` is a wrapper that unpacks it into RAM on start and

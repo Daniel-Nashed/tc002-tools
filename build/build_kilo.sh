@@ -16,8 +16,7 @@ source "${SCRIPT_DIR}/common.sh"
 # kilo.c's own SHA-256 at this commit is checked too, as a second,
 # independent confirmation that nothing was rewritten upstream.
 KILO_REPO_URL="https://github.com/antirez/kilo.git"
-KILO_COMMIT="323d93b29bd89a2cb446de90c4ed4fea1764176e"
-KILO_C_SHA256="4a44dd0e41670a9e49ecccb338ee199334f0dd472fc7f86467569cf99c391abe"
+# Commit and SHA-256 of kilo.c: KILO_COMMIT and KILO_C_SHA256 in build/versions.env.
 # --- end pinned upstream source ---
 
 SRC_DIR="${WORK_DIR}/kilo"

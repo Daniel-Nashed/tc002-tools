@@ -8,14 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
-DROPBEAR_VERSION="2026.94"
+# Version and SHA-256: DROPBEAR_VERSION and DROPBEAR_SHA256 in build/versions.env.
 DROPBEAR_TARBALL="dropbear-${DROPBEAR_VERSION}.tar.bz2"
 DROPBEAR_URL="https://matt.ucc.asn.au/dropbear/releases/${DROPBEAR_TARBALL}"
 
 # Verified 2026-09-10 by downloading the release tarball directly from
 # matt.ucc.asn.au and computing its SHA-256. Re-verify independently before
 # relying on this for anything security-sensitive - see docs/dropbear.md.
-DROPBEAR_SHA256="e098034a843699200c8c977a991fff73159735bf795d5f72ef672c41a6b1ae81"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
@@ -106,7 +105,7 @@ apply_project_config()
   dump_file "${SRC_DIR}/localoptions.h"
 
   # flythings-passwd-fallback.c must sit next to dbutil.c (src/, since
-  # Dropbear 2026.94's source tree layout), because it is pulled in with a
+  # this Dropbear release's source tree layout), because it is pulled in with a
   # plain #include "flythings-passwd-fallback.c" that resolves relative to
   # the including file's own directory.
   mkdir -p "${SRC_DIR}/src"
@@ -239,7 +238,7 @@ configure_and_build()
   # reference dbutil.o, not dbutil.c), so no extra filtering is needed -
   # and none is safe to add, since Dropbear's compile-flag order differs
   # between versions (older releases end the command in "-o dbutil.o",
-  # 2026.94 ends it in "-o obj/dbutil.o -c").
+  # this release ends it in "-o obj/dbutil.o -c").
   local dbutil_line
   dbutil_line="$(grep -- 'dbutil\.c' "$make_log" | sed -n '1p')"
 

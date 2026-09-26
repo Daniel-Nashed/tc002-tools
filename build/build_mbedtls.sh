@@ -12,22 +12,22 @@ source "${SCRIPT_DIR}/common.sh"
 
 # --- Pinned upstream source. Review before bumping. ---
 #
-# Deliberately the 3.6 LTS line, not the newest 4.2.0 (both actively
-# maintained as of 2026-09-12; curl 8.22.0's own vtls/mbedtls.c already
+# Deliberately the 3.6 LTS line, not the newest 4.2 (both actively
+# maintained as of 2026-09-12; curl's own vtls/mbedtls.c already
 # has explicit "#if MBEDTLS_VERSION_NUMBER >= 0x04000000" branches, so it
 # does genuinely support 4.x too). Checked directly against the real
-# 4.2.0 release tarball first: mbedTLS 4.x split its crypto code out into
+# 4.2 release tarball first: mbedTLS 4.x split its crypto code out into
 # a separate "TF-PSA-Crypto" project, bundled here as a second, large,
 # very recently introduced sub-build (its own CMakeLists.txt, its own
 # crypto-library.make included from library/Makefile) - a materially
 # bigger and newer moving part than this project's "boring, well-
-# trodden" bar for a security-sensitive TLS library. 3.6.7 (also a 2026
+# trodden" bar for a security-sensitive TLS library. 3.6 (also a 2026
 # release, so still genuinely current within its own LTS line, not a
 # stale fallback) has none of that: a single self-contained tree, a
 # plain library/Makefile with no extra submodule build system, and is
 # what virtually every other project cross-compiling mbedTLS via plain
 # make today is actually using.
-MBEDTLS_VERSION="3.6.7"
+# Version and SHA-256: MBEDTLS_VERSION and MBEDTLS_SHA256 in build/versions.env.
 MBEDTLS_TARBALL="mbedtls-${MBEDTLS_VERSION}.tar.bz2"
 MBEDTLS_URL="https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-${MBEDTLS_VERSION}/${MBEDTLS_TARBALL}"
 
@@ -35,7 +35,6 @@ MBEDTLS_URL="https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-${MBE
 # GitHub and computing its SHA-256, which matches the checksum GitHub's
 # own release page publishes for this exact file. Re-verify independently
 # before relying on this for anything security-sensitive.
-MBEDTLS_SHA256="a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6"
 # --- end pinned upstream source ---
 
 DOWNLOAD_DIR="${WORK_DIR}/downloads"

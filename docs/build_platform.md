@@ -16,6 +16,61 @@ Alpine has no such package), and an ARM sysroot of Alpine's own armv7 static lib
 components that need them. The first `docker build` compiles gcc and takes a long while; Docker's layer cache makes
 every later run instant unless the Dockerfile changes.
 
+## Toolchain and versions
+
+Every pinned version lives in one file, [build/versions.env](../build/versions.env): the container base images, the
+compiler, and each upstream source with its SHA-256. To change a version, edit it there (for an upstream source, the
+`_VERSION` and its `_SHA256` together) and rebuild. `build/common.sh` sources the file for every build script, and the
+three `docker-*/run.sh` scripts pass the image versions to `docker build`; the Dockerfiles have no defaults, so there is
+no second copy. This page lists what is set where, without the numbers, so it does not need updating with them.
+
+| Component                                 | Set in `build/versions.env` by        | Notes                                                                    |
+| ----------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------ |
+| Container OS, ARM and native Alpine       | `ALPINE_VERSION`                      | one version for both Alpine images                                       |
+| Container OS, nshbox tests                | `UBUNTU_VERSION`                      | the Ubuntu test image                                                    |
+| Cross toolchain: GCC, g++, musl, binutils | `MCM_COMMIT`                          | one musl-cross-make commit decides these and gmp, mpfr, mpc, headers     |
+| ncurses, zlib, qemu-arm                   | not pinned                            | current in the Alpine repository of `ALPINE_VERSION` at image build time |
+| Dropbear                                  | `DROPBEAR_VERSION`, `DROPBEAR_SHA256` |                                                                          |
+| gzip                                      | `GZIP_VERSION`, `GZIP_SHA256`         |                                                                          |
+| ncdu                                      | `NCDU_VERSION`, `NCDU_SHA256`         |                                                                          |
+| kilo                                      | `KILO_COMMIT`, `KILO_C_SHA256`        | a git commit, and the SHA-256 of `kilo.c` at that commit                 |
+| mbedTLS                                   | `MBEDTLS_VERSION`, `MBEDTLS_SHA256`   | used by curl and by nshbox's checksum commands                           |
+| curl                                      | `CURL_VERSION`, `CURL_SHA256`         |                                                                          |
+| OpenSSL                                   | `OPENSSL_VERSION`, `OPENSSL_SHA256`   | nginx and the optional `openssl` CLI                                     |
+| nginx                                     | `NGINX_VERSION`, `NGINX_SHA256`       |                                                                          |
+| 7-Zip                                     | `SEVENZIP_VERSION`, `SEVENZIP_SHA256` | the tarball name is derived from the version                             |
+
+Notes:
+- **The compiler.** musl-cross-make builds the cross compiler from source and checks the SHA-1 of every source tarball
+  it downloads. It is installed in `/opt/arm-musl`. The GCC version is recorded as `compiler` in every
+  `dist/manifest-*.json`. Bumping `MCM_COMMIT` changes the compiler and musl versions, so it needs a rebuild of
+  everything and a retest.
+- **Target and flags.** ARMv7-A, VFPv3-D16, hard float (`--with-arch=armv7-a --with-fpu=vfpv3-d16 --with-float=hard`),
+  matching the device's Cortex-A7; see [platform.md](platform.md). Components are compiled with
+  `-Os -ffunction-sections -fdata-sections` and linked with `-static -Wl,--gc-sections`
+  ([build/common.sh](../build/common.sh)).
+- **Libraries.** The ncurses and zlib packages are unpacked into `/opt/sysroot` with apk's foreign-architecture support
+  (nothing is executed, signature checking stays on). `qemu-arm` runs in user mode only, for nginx's `configure` test
+  programs ([build/qemu-cc-wrapper.sh](../build/qemu-cc-wrapper.sh)).
+- **C++.** 7-Zip uses the `g++` and the static `libstdc++` of the same GCC build.
+- **Own source.** `nshbox` is this repository's own source and has no upstream version.
+
+To read the exact versions from a built image:
+
+```sh
+docker run --rm tc002-tools-build-musl arm-linux-musleabihf-gcc --version
+```
+
+```sh
+docker run --rm tc002-tools-build-musl arm-linux-musleabihf-ld --version
+```
+
+The musl version is the one string of the form `1.x.y` in its shared object:
+
+```sh
+docker run --rm tc002-tools-build-musl sh -c 'strings /opt/arm-musl/arm-linux-musleabihf/lib/libc.so | grep -E "^1[.][0-9]+[.][0-9]+$"'
+```
+
 ## Building
 
 There is exactly one command:
