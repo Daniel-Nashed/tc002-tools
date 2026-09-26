@@ -42,8 +42,11 @@ RUN apk add --no-cache \
 # The compiler build prints many thousands of lines, and BuildKit clips a step's
 # log at 2 MiB (a limit on the BuildKit daemon, not the client) - which hides
 # the error at the end of a failed build. So its output goes to a file inside
-# the step and only the tail is printed: the last 300 lines if it fails, the
-# last 5 if it succeeds.
+# the step and only the interesting part is printed: on a failure the lines that
+# look like errors (with their line numbers), and after the last attempt the
+# final 300 lines; on success the last 5. The sources are downloaded during the
+# build, and a mirror can fail once, so the build is tried up to 3 times
+# (make picks up where it stopped; every download is checked against a hash).
 RUN set -eux; \
     git clone https://github.com/richfelker/musl-cross-make /tmp/mcm; \
     cd /tmp/mcm; \
@@ -54,8 +57,18 @@ RUN set -eux; \
         'GCC_CONFIG += --with-arch=armv7-a --with-fpu=vfpv3-d16 --with-float=hard' \
         'COMMON_CONFIG += CFLAGS="-g0 -Os" CXXFLAGS="-g0 -Os" LDFLAGS="-s"' \
         > config.mak; \
-    ( make -j"$(nproc)" && make install OUTPUT=/opt/arm-musl ) > /tmp/mcm-build.log 2>&1 \
-        || { echo "musl-cross-make FAILED - last 300 lines of its output:"; tail -n 300 /tmp/mcm-build.log; exit 1; }; \
+    attempt=1; \
+    until ( make -j"$(nproc)" && make install OUTPUT=/opt/arm-musl ) >> /tmp/mcm-build.log 2>&1; do \
+        echo "musl-cross-make attempt $attempt FAILED - error lines from its output (line number: text):"; \
+        grep -n -E '\*\*\*|rror:|Unable|failed|404|Temporary|resolve' /tmp/mcm-build.log | tail -n 40 || true; \
+        if [ "$attempt" -ge 3 ]; then \
+            echo "giving up - last 300 lines of its output:"; \
+            tail -n 300 /tmp/mcm-build.log; \
+            exit 1; \
+        fi; \
+        attempt=$((attempt + 1)); \
+        echo "retrying (attempt $attempt of 3)"; \
+    done; \
     echo "musl-cross-make finished; last lines of its output:"; \
     tail -n 5 /tmp/mcm-build.log; \
     cd /; \
