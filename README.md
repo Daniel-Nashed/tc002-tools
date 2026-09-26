@@ -14,8 +14,9 @@ This is an **unofficial**, community project. It is not affiliated with, endorse
 ssh -p 2222 root@<device-ip>      # 4. connect - public-key auth, no password
 ```
 
-Step 1 is optional and explicit: without it, `./build_all.sh` builds the image itself on the first run. Only an
-`amd64` image is published so far; on an `arm64` machine skip step 1. To skip the build entirely, `./tc002_setup.sh
+Step 1 is optional and explicit: without it, `./build_all.sh` builds the image itself on the first run (or build it
+alone with `./build_image.sh`). Only an `amd64` image is published so far; on an `arm64` machine skip step 1. Details:
+[docs/build_platform.md](docs/build_platform.md#getting-the-image-pull-it-or-build-it). To skip the build entirely, `./tc002_setup.sh
 --release` deploys a published release instead - see [docs/releasing.md](docs/releasing.md).
 
 That's it - you now have root SSH access to your TC002, authenticated by your own SSH key.

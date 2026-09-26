@@ -17,15 +17,25 @@ components that need them. Compiling gcc takes about 25 minutes, so it should ha
 
 The image is identified by those inputs: a tag that is a hash of the Dockerfile, `ALPINE_VERSION` and `MCM_COMMIT`
 (`build/docker-alpine-arm/image-tag.sh`). `run.sh` builds the image only if an image with the current tag is not
-here, so a matching image is never rebuilt, and an image for other inputs is never used by mistake. You can also skip
-the compile by pulling the image that GitHub Actions publishes for the same tag:
+here, so a matching image is never rebuilt, and an image for other inputs is never used by mistake.
 
-```sh
-./pull_build_image.sh
-```
+### Getting the image: pull it or build it
 
-It works out your platform, pulls that image, and tags it as a local build would be tagged. So far only an `amd64`
-image is published; on an `arm64` machine the script says so, and `./build_all.sh` builds the image locally.
+There are two explicit ways, and you never have to choose one: if the image is missing, every build script builds it.
+
+| To                                                     | Run                        | Notes                                                                             |
+| ------------------------------------------------------ | -------------------------- | --------------------------------------------------------------------------------- |
+| Use the published, ready-made image (the admin's path) | `./pull_build_image.sh`    | Pulls the image GitHub Actions built for the same tag. Fast; `amd64` only so far. |
+| Build the image yourself (the developer's path)        | `./build_image.sh`         | About 25 minutes for the compiler the first time; a repeat is instant.            |
+| Build it again for unchanged inputs                    | `./build_image.sh --force` | For example to check that a local build behaves like the published one.           |
+| Just build, and let the image build itself if missing  | `./build_all.sh`           | Uses a matching image, pulled or built earlier; builds one if there is none.      |
+
+- **The pull** works out your platform, requests that platform from the registry and tags the result like a local build
+  (`tc002-tools-build-musl:<tag>` and `:latest`). Only an `amd64` image is published so far; on an `arm64` machine the
+  script says so and the image is built locally instead. It is never run automatically.
+- **Changing the Dockerfile, `ALPINE_VERSION` or `MCM_COMMIT`** changes the tag, so the next build makes a new image,
+  and a pulled or older image for other inputs is not used.
+- **A failed image build** leaves its full output in `build/work-musl/image-build.log`.
 
 ## Toolchain and versions
 

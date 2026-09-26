@@ -15,24 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Pinned versions (build/versions.env) - passed to the image build below.
-source "${REPO_ROOT}/build/versions.env"
 IMAGE="tc002-tools-build-musl"
-
-export BUILDKIT_PROGRESS=plain
-
-# BuildKit clips each build step's log at 2 MiB by default, and the compiler
-# build (gcc) is far longer - the clipped part is where an error would be.
-# -1 = no limit. That limit lives in the BuildKit daemon, so these variables
-# only help where the daemon takes them from the client's environment; the
-# Dockerfile therefore also keeps the compiler build's own output small. The
-# full client output is kept in a file too, so a failed image build can be
-# read (or sent) from there after the terminal scrolled.
-export BUILDKIT_STEP_LOG_MAX_SIZE=-1
-export BUILDKIT_STEP_LOG_MAX_SPEED=-1
-
-IMAGE_LOG="${REPO_ROOT}/build/work-musl/image-build.log"
-mkdir -p "$(dirname "$IMAGE_LOG")"
 
 # The image is identified by the inputs that define it (see image-tag.sh): if an
 # image with this tag is already here - built earlier, or fetched with
@@ -43,9 +26,7 @@ IMAGE_REF="${IMAGE}:${IMAGE_TAG}"
 if docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
   echo "[build image] using ${IMAGE_REF}" >&2
 else
-  echo "[build image] ${IMAGE_REF} is not here - building it (the compiler takes about 25 minutes;" >&2
-  echo "[build image] ./pull_build_image.sh fetches the published image instead, if there is one for this platform)" >&2
-  docker build --build-arg ALPINE_VERSION="$ALPINE_VERSION" --build-arg MCM_COMMIT="$MCM_COMMIT" -t "$IMAGE_REF" -t "${IMAGE}:latest" "$SCRIPT_DIR" 2>&1 | tee "$IMAGE_LOG" >&2
+  "${SCRIPT_DIR}/build-image.sh"
 fi
 
 # Every container gets a readable, unique name (image, what it runs, this script's
