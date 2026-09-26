@@ -17,6 +17,7 @@ Where each script runs: **host** is your own machine, **container** is one of th
 | `build_all.sh`                | host, then container            | Builds everything required (`--with-curl`/`--with-nginx`/`--with-openssl`/`--with-7zip` or `--all` add the opt-in tools; `--rebuild` forces). See [build_platform.md](build_platform.md).          |
 | `build_<name>.sh`             | host, then container            | One thin wrapper per component (`nshbox`, `kilo`, `gzip`, `ncdu`, `dropbear`, `curl`, `nginx`, `openssl`, `mbedtls`, `7zip`, `ca_bundle`): runs `build/build_<name>.sh` in the ARM musl container. |
 | `build_tc002-discover.sh`     | host, then a native container   | Builds the host-side discovery tool in its own native Alpine container.                                                                                                                            |
+| `pull_build_image.sh`         | host                            | Pulls the published ARM build image for this checkout's inputs and tags it like a local build, so `build_all.sh` does not compile the cross compiler.                                              |
 | `verify.sh`                   | host, then container            | Checks `dist/` without a device: ARM EABI hard-float, fully static, stripped, no build-host paths, manifest present.                                                                               |
 | `tc002_setup.sh`              | host                            | Sets up a device from scratch over ADB (`install/deploy.sh`). See [manual_rollout.md](manual_rollout.md).                                                                                          |
 | `tc002_start.sh`              | host                            | Brings SSH back up on an already provisioned device, for example after a reboot: finds it again and starts Dropbear. Pushes nothing.                                                               |
@@ -28,19 +29,20 @@ Where each script runs: **host** is your own machine, **container** is one of th
 
 ### Build (`build/`)
 
-| Script                        | Runs on          | What it does                                                                                                                                                        |
-| ----------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `build_all_musl.sh`           | container        | The in-container driver behind `build_all.sh`: builds the components in order, handles the flags and prints the summary.                                            |
-| `build_<name>.sh`             | container        | The real build of each component (download, checksum check, cross-compile, static check, strip, manifest).                                                          |
-| `build_tc002-discover.sh`     | native container | Static native build of the discovery tool.                                                                                                                          |
-| `common.sh`                   | container        | Shared variables and helpers (toolchain, `log`, `die`, `verify_static_binary`, timing). Sourced, never run.                                                         |
-| `versions.env`                | host, container  | Every pinned version and SHA-256 (base images, compiler, upstream sources). Sourced by `common.sh`; the `run.sh` scripts pass the image versions to `docker build`. |
-| `qemu-cc-wrapper.sh`          | container        | Lets nginx's `configure` run its ARM test programs under `qemu-arm`.                                                                                                |
-| `docker-alpine-arm/run.sh`    | host             | Builds the ARM musl image if needed and runs a command in it with the repository mounted.                                                                           |
-| `docker-alpine/run.sh`        | host             | The same for the native Alpine image.                                                                                                                               |
-| `docker-ubuntu/run.sh`        | host             | The same for the Ubuntu test image.                                                                                                                                 |
-| `test_build_nshbox_native.sh` | native container | The build behind `test_build_nshbox_native.sh` above.                                                                                                               |
-| `test_nshbox_functional.sh`   | Ubuntu container | The build and run behind `test_nshbox.sh`.                                                                                                                          |
+| Script                           | Runs on          | What it does                                                                                                                                                             |
+| -------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `build_all_musl.sh`              | container        | The in-container driver behind `build_all.sh`: builds the components in order, handles the flags and prints the summary.                                                 |
+| `build_<name>.sh`                | container        | The real build of each component (download, checksum check, cross-compile, static check, strip, manifest).                                                               |
+| `build_tc002-discover.sh`        | native container | Static native build of the discovery tool.                                                                                                                               |
+| `common.sh`                      | container        | Shared variables and helpers (toolchain, `log`, `die`, `verify_static_binary`, timing). Sourced, never run.                                                              |
+| `versions.env`                   | host, container  | Every pinned version and SHA-256 (base images, compiler, upstream sources). Sourced by `common.sh`; the `run.sh` scripts pass the image versions to `docker build`.      |
+| `qemu-cc-wrapper.sh`             | container        | Lets nginx's `configure` run its ARM test programs under `qemu-arm`.                                                                                                     |
+| `docker-alpine-arm/image-tag.sh` | host, container  | Prints the tag that identifies the ARM build image (hash of the Dockerfile, `ALPINE_VERSION` and `MCM_COMMIT`). Used by `run.sh`, `pull_build_image.sh` and `image.yml`. |
+| `docker-alpine-arm/run.sh`       | host             | Builds the ARM musl image if needed and runs a command in it with the repository mounted.                                                                                |
+| `docker-alpine/run.sh`           | host             | The same for the native Alpine image.                                                                                                                                    |
+| `docker-ubuntu/run.sh`           | host             | The same for the Ubuntu test image.                                                                                                                                      |
+| `test_build_nshbox_native.sh`    | native container | The build behind `test_build_nshbox_native.sh` above.                                                                                                                    |
+| `test_nshbox_functional.sh`      | Ubuntu container | The build and run behind `test_nshbox.sh`.                                                                                                                               |
 
 ### Install (`install/`, run over ADB from the host)
 

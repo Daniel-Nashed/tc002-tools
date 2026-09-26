@@ -60,19 +60,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The same script contributors use: pulls the published image and tags it, so
+      # the build below finds it and does not build it
       - name: Pull the build image
-        run: |
-          docker pull "${{ needs.image.outputs.ref }}"
-          docker tag "${{ needs.image.outputs.ref }}" tc002-tools-build-musl:latest
+        run: ./pull_build_image.sh
 
       - name: Build the core deliverables
-        env:
-          TC002_SKIP_IMAGE_BUILD: '1'
         run: ./build_all.sh
 
       - name: Verify the artifacts
-        env:
-          TC002_SKIP_IMAGE_BUILD: '1'
         run: ./verify.sh
 
       - name: Upload dist/

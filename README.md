@@ -8,10 +8,15 @@ This is an **unofficial**, community project. It is not affiliated with, endorse
 ## Quick start
 
 ```sh
-./build_all.sh                    # 1. build the core tools (in a disposable container, never on your host)
-./tc002_setup.sh                  # 2. find your device over ADB and deploy everything to it
-ssh -p 2222 root@<device-ip>      # 3. connect - public-key auth, no password
+./pull_build_image.sh             # 1. fetch the ready-made build image (skips ~25 minutes compiling the compiler)
+./build_all.sh                    # 2. build the core tools (in a disposable container, never on your host)
+./tc002_setup.sh                  # 3. find your device over ADB and deploy everything to it
+ssh -p 2222 root@<device-ip>      # 4. connect - public-key auth, no password
 ```
+
+Step 1 is optional and explicit: without it, `./build_all.sh` builds the image itself on the first run. Only an
+`amd64` image is published so far; on an `arm64` machine skip step 1. To skip the build entirely, `./tc002_setup.sh
+--release` deploys a published release instead - see [docs/releasing.md](docs/releasing.md).
 
 That's it - you now have root SSH access to your TC002, authenticated by your own SSH key.
 

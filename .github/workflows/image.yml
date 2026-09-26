@@ -54,8 +54,8 @@ jobs:
           source build/versions.env
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           image="ghcr.io/${owner}/tc002-tools-build-musl"
-          dockerfile_hash="$(sha256sum build/docker-alpine-arm/Dockerfile | cut -d' ' -f1)"
-          tag="$(printf '%s\n%s\n%s\n' "$ALPINE_VERSION" "$MCM_COMMIT" "$dockerfile_hash" | sha256sum | cut -c1-16)"
+          # The same calculation run.sh and pull_build_image.sh use
+          tag="$(build/docker-alpine-arm/image-tag.sh)"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "ref=${image}:${tag}" >> "$GITHUB_OUTPUT"

@@ -13,8 +13,19 @@ the device, which cannot happen when nothing is dynamic. What changed and why is
 The toolchain lives in one Docker image, [build/docker-alpine-arm](../build/docker-alpine-arm/README.md): a pinned
 Alpine base, an `arm-linux-musleabihf` cross compiler built from source with musl-cross-make (pinned to one commit;
 Alpine has no such package), and an ARM sysroot of Alpine's own armv7 static libraries (ncurses, zlib) for the
-components that need them. The first `docker build` compiles gcc and takes a long while; Docker's layer cache makes
-every later run instant unless the Dockerfile changes.
+components that need them. Compiling gcc takes about 25 minutes, so it should happen once per set of inputs.
+
+The image is identified by those inputs: a tag that is a hash of the Dockerfile, `ALPINE_VERSION` and `MCM_COMMIT`
+(`build/docker-alpine-arm/image-tag.sh`). `run.sh` builds the image only if an image with the current tag is not
+here, so a matching image is never rebuilt, and an image for other inputs is never used by mistake. You can also skip
+the compile by pulling the image that GitHub Actions publishes for the same tag:
+
+```sh
+./pull_build_image.sh
+```
+
+It works out your platform, pulls that image, and tags it as a local build would be tagged. So far only an `amd64`
+image is published; on an `arm64` machine the script says so, and `./build_all.sh` builds the image locally.
 
 ## Toolchain and versions
 
