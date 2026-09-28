@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Cross-builds nginx for the TC002 (arm-linux-musleabihf), FULLY STATIC, with the
 # musl toolchain in build/docker-alpine-arm. Minimal module
-# set, no PCRE - see nginx/README.md for why. gzip is kept (zlib
+# set, PCRE2 enabled (map/location regex, no rewrite module - see
+# nginx/README.md for why). gzip is kept (zlib
 # statically linked, like curl - see curl/README.md). TLS is OpenSSL,
 # statically linked against build_openssl.sh's own build (this depends
 # on it - run it first; neither this script nor the top-level
@@ -171,15 +172,25 @@ configure_and_build()
   # all. Added on top: stub_status (cheap, genuinely useful diagnostic
   # page, matches this project's existing diagnostic-tooling bias).
   #
+  # PCRE2 (regex location matching, regex map entries): --with-pcre (bare, no
+  # =path) is REQUIRED here even though http_rewrite_module stays disabled -
+  # confirmed directly in nginx's own auto/modules (2026-09-28): USE_PCRE only
+  # becomes YES as a side effect of HTTP_REWRITE=YES, UNLESS --with-pcre is
+  # given explicitly, which sets USE_PCRE=YES on its own and is what actually
+  # builds ngx_regex_module (the core module location/map regex depends on) -
+  # without it, PCRE is never probed at all ("PCRE library is not used" in the
+  # summary), no matter that the library is present in the sysroot. With
+  # --with-pcre given and no "=path", nginx's own auto-detection then finds the
+  # system PCRE2 library in the ARM sysroot (pcre2-dev/pcre2-static, see
+  # build/docker-alpine-arm/Dockerfile) the same way it finds zlib and OpenSSL
+  # (a feature test against -lpcre2-8, steered by --with-cc-opt/--with-ld-opt
+  # below).
+  #
   # Disabled, and why:
-  # - --without-pcre: no regex support. Cross-compiling nginx's own
-  #   bundled PCRE, or adding a new libpcre*-dev:armhf cross package, is
-  #   real added build surface for a feature not asked for - matches the
-  #   "disable what we don't need" instruction for this first pass.
-  # - --without-http_rewrite_module: rewrite needs PCRE for regex
-  #   locations; disabled together with it (confirmed together: nginx's
-  #   own configure accepts this combination cleanly - tested natively,
-  #   2026-09-12).
+  # - --without-http_rewrite_module: rewrite/return/if/set were not asked for
+  #   (PCRE2 alone already gives regex location matching and regex map
+  #   entries, which do not need the rewrite module) - a small, tracked
+  #   follow-up if they are needed later, see nginx/README.md.
   # - --without-ssi/--userid/--auth_basic/--mirror/--autoindex/--geo/
   #   --split_clients/--referer/--fastcgi/--uwsgi/--scgi/--grpc/
   #   --memcached/--limit_conn/--limit_req/--empty_gif/--browser/all
@@ -292,7 +303,7 @@ configure_and_build()
   fi
 
   configure_args+=(
-    --without-pcre
+    --with-pcre
     --without-http_rewrite_module
     --without-http_ssi_module
     --without-http_userid_module
@@ -347,8 +358,12 @@ configure_and_build()
   log "configuration summary:"
   echo "$summary" | while IFS= read -r line; do log "  ${line}"; done
 
-  echo "$summary" | grep -qF 'PCRE library is disabled' \
-    || die "configure's summary does not confirm PCRE is disabled: ${summary}"
+  # "using system PCRE2 library" - confirmed directly in auto/summary/
+  # auto/lib/pcre/conf (2026-09-28): this exact line prints when PCRE2 is
+  # found via auto-detection (no --with-pcre=path given, PCRE_LIBRARY=PCRE2),
+  # steered at the sysroot's pcre2-static by --with-cc-opt/--with-ld-opt above.
+  echo "$summary" | grep -qF 'using system PCRE2 library' \
+    || die "configure's summary does not confirm PCRE2 was found: ${summary}"
 
   if [ "$NGX_WITH_TLS" -eq 1 ]; then
     # "using system OpenSSL library" - confirmed directly in
@@ -362,7 +377,7 @@ configure_and_build()
     echo "$summary" | grep -qF 'using system OpenSSL library' \
       || die "configure's summary does not confirm OpenSSL was found: ${summary}"
 
-    log "verified: PCRE disabled, OpenSSL found via auto-detection, in configure's own summary"
+    log "verified: PCRE2 found, OpenSSL found via auto-detection, in configure's own summary"
   else
     # --without-tls: the original pre-OpenSSL check - confirmed directly
     # (2026-09-12, before OpenSSL was ever added here) that this is the
@@ -370,7 +385,7 @@ configure_and_build()
     echo "$summary" | grep -qF 'OpenSSL library is not used' \
       || die "configure's summary does not confirm OpenSSL is unused: ${summary}"
 
-    log "verified: PCRE disabled, OpenSSL confirmed unused (--without-tls), in configure's own summary"
+    log "verified: PCRE2 found, OpenSSL confirmed unused (--without-tls), in configure's own summary"
   fi
 
   # The prefix summary lines are printed separately, further down in the
@@ -493,7 +508,7 @@ write_manifest()
     echo "  \"compiler\": \"${cc_version}\","
     echo "  \"name\": \"nginx\","
     echo "  \"tls\": \"${tls_status}\","
-    echo "  \"pcre\": \"none\","
+    echo "  \"pcre\": \"pcre2-static\","
     echo "  \"zlib\": \"static\","
     echo "  \"prefix\": \"${NGX_PREFIX}\","
     echo "  \"size_bytes\": ${size},"
@@ -547,16 +562,16 @@ main()
   extract_source
 
   if [ "$NGX_WITH_TLS" -eq 1 ]; then
-    header "nginx ${NGINX_VERSION}: configure && make (OpenSSL, no PCRE, static zlib)"
+    header "nginx ${NGINX_VERSION}: configure && make (OpenSSL, PCRE2, static zlib)"
   else
-    header "nginx ${NGINX_VERSION}: configure && make (no TLS, no PCRE, static zlib)"
+    header "nginx ${NGINX_VERSION}: configure && make (no TLS, PCRE2, static zlib)"
   fi
   configure_and_build
 
   if [ "$NGX_WITH_TLS" -eq 1 ]; then
-    header "nginx ${NGINX_VERSION}: verifying artifact (static OpenSSL, no PCRE, static zlib)"
+    header "nginx ${NGINX_VERSION}: verifying artifact (static OpenSSL, PCRE2, static zlib)"
   else
-    header "nginx ${NGINX_VERSION}: verifying artifact (no TLS, no PCRE, static zlib)"
+    header "nginx ${NGINX_VERSION}: verifying artifact (no TLS, PCRE2, static zlib)"
   fi
   verify_artifact
 

@@ -71,12 +71,23 @@ OpenSSL requirement entirely and fall back to nginx's original pre-OpenSSL confi
 built yet, or not wanted for a given run, rather than the only options being "build OpenSSL first" or "edit this
 script".
 
-## No PCRE - minimal by design
+## PCRE2 - enabled, but not the rewrite module
 
-`--without-pcre`, and therefore no rewrite module either (`--without-http_rewrite_module` - it needs PCRE for
-regex locations). Cross-compiling nginx's own bundled PCRE, or adding a new `libpcre*-dev:armhf` cross package, is
-real added build surface for a feature not asked for. Confirmed together via an actual native build (2026-09-12)
-that this combination configures and builds cleanly.
+Regex support (`location ~`/`~*`, regex `map` entries) uses the **system PCRE2 library** from the ARM sysroot
+(`pcre2-dev`/`pcre2-static`, added to [../build/docker-alpine-arm/Dockerfile](../build/docker-alpine-arm/Dockerfile)) -
+no `--with-pcre=path`, so nginx's own auto-detection finds it the same way it finds zlib and OpenSSL: a feature test
+against `-lpcre2-8`, steered by `--with-cc-opt`/`--with-ld-opt` at the sysroot. Static, like everything else here - no
+`libpcre2-8.so` dependency on the device (`verify_static_binary` checks that no artifact here has any NEEDED entry).
+
+Earlier this was `--without-pcre`, written for the old Debian Buster cross-build: adding a `libpcre*-dev:armhf` cross
+package, or cross-compiling nginx's own bundled PCRE from source, was real added build surface for a feature not
+asked for. That reasoning does not carry over to Alpine, which already publishes a static PCRE2 package for `armv7`
+the same way it does for `ncurses` and `zlib` - so enabling it costs one line in the Dockerfile, not a new build
+stage.
+
+`--without-http_rewrite_module` stays: `rewrite`/`return`/`if`/`set` were not asked for, and PCRE2 alone already
+covers what was - regex location matching and regex `map` entries, neither of which needs the rewrite module. A
+small, tracked follow-up if it is needed later (see "Nothing here is final" below).
 
 ## What's kept vs. disabled
 
@@ -92,7 +103,10 @@ build (2026-09-12) that disabling every one of them still produces a working bui
 `least_conn`, `random`, `keepalive`, `zone`, `sticky`). The mail proxy (POP3/IMAP/SMTP) is not built either - unlike
 the modules above, it is opt-in (`--with-mail`) in nginx itself, so no flag was even needed to exclude it.
 
-**`map` is enabled** (it was on the disabled list in the first version of this build; re-enabled 2026-09-26 on request). One limitation: without PCRE, `map` matches exact names, wildcards and hostnames only - regular-expression patterns (`~`, `~*`) need PCRE, which this build does not have. Likewise `return`, `if`, `set` and `rewrite` are all part of the rewrite module, which needs PCRE, so they are not available either (see above).
+**`map` is enabled** (it was on the disabled list in the first version of this build; re-enabled 2026-09-26 on
+request). With PCRE2 enabled (see above), `map` entries can use regular-expression patterns (`~`, `~*`) as well as
+exact names, wildcards and hostnames. `location` can use regex patterns too. `return`, `if`, `set` and `rewrite` are
+still not available - they are part of the rewrite module, which stays disabled (see above).
 
 Verified end to end with a real native (x86_64) build of this exact flag set (2026-09-12): static file serving,
 `stub_status`, and `proxy_pass` to a backend all confirmed working.
@@ -132,7 +146,7 @@ for a performance-tuning-only quirk.
 Runs inside the build container like every other `build/` script - see
 [../docs/build_platform.md](../docs/build_platform.md). Builds [OpenSSL](../openssl/README.md) first (see above),
 then downloads and checksum-verifies nginx's own pinned release tarball, cross-compiles with the flags described
-above, verifies the result is a real ELF binary with no dynamic dependency on OpenSSL/libatomic/PCRE at all
+above, verifies the result is a real ELF binary with no dynamic dependency on OpenSSL/libatomic/PCRE2 at all
 (everything statically linked), with zlib statically linked too, strips it, and writes `dist/nginx` plus
 `dist/manifest-nginx.json`.
 
@@ -157,8 +171,10 @@ See [tests/nginx/README.md](../tests/nginx/README.md): a ready-made configuratio
 Built with the static musl toolchain and verified on the real device with [tests/nginx](../tests/nginx/README.md):
 `nginx -t`, plain HTTP, the `map` module, `stub_status`, and HTTPS forced to TLS 1.2 and to TLS 1.3 - once with an
 RSA and once with an ECDSA certificate - all pass, and the device's free memory afterwards is back where it started.
-The binary is about 3 MB (OpenSSL statically linked with the trimmed feature set described in
-[../openssl/README.md](../openssl/README.md), zlib, no PCRE); the manifest `dist/manifest-nginx.json` records `"tls":
-"openssl-static"`, `"pcre": "none"`, `"zlib": "static"`, and `verify_artifact()` fails the build if the result is not
-fully static. Deployment is compressed-on-demand (`/data/bin/nginx` is a wrapper that unpacks it into RAM on start and
-deletes it afterwards, see [../docs/device_layout.md](../docs/device_layout.md#deployment-modes)).
+This was verified before PCRE2 was added (see above); [tests/nginx](../tests/nginx/README.md) does not yet exercise a
+regex `location` or `map` entry, so re-run it after a rebuild before relying on that specifically. The binary is
+statically linked (OpenSSL with the trimmed feature set described in [../openssl/README.md](../openssl/README.md),
+zlib, PCRE2); the manifest `dist/manifest-nginx.json` records `"tls": "openssl-static"`, `"pcre": "pcre2-static"`,
+`"zlib": "static"`, and `verify_artifact()` fails the build if the result is not fully static. Deployment is
+compressed-on-demand (`/data/bin/nginx` is a wrapper that unpacks it into RAM on start and deletes it afterwards, see
+[../docs/device_layout.md](../docs/device_layout.md#deployment-modes)).

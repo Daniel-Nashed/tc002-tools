@@ -92,7 +92,7 @@ RUN set -eux; \
     rm -f /tmp/t /tmp/t.c
 
 # Static ARM libraries for components that need them (ncdu: ncurses, Dropbear:
-# zlib - curl and nginx will need the same zlib later). Alpine's
+# zlib, nginx: zlib and PCRE2). Alpine's
 # own armv7 packages are installed into a separate sysroot with apk's foreign-
 # architecture support (--arch/--root/--no-scripts: nothing is executed, only
 # unpacked) - the same musl libc this toolchain targets, hard-float ARMv7 -
@@ -115,11 +115,12 @@ RUN set -eux; \
     apk add --no-cache --root /opt/sysroot --arch armv7 --initdb --no-scripts \
         --keys-dir /usr/share/apk/keys/armv7 --repositories-file /etc/apk/repositories \
         ncurses-dev ncurses-static ncurses-libs ncurses-terminfo-base ncurses-terminfo \
-        zlib-dev zlib-static; \
+        zlib-dev zlib-static pcre2-dev pcre2-static; \
     echo "--- what the sysroot has for ncurses/tinfo/terminfo:"; \
     find /opt/sysroot -name '*ncurses*' -o -name '*tinfo*' -o -name 'xterm-256color' | sort; \
     test -f /opt/sysroot/usr/lib/libncursesw.a; \
-    test -f /opt/sysroot/usr/lib/libz.a
+    test -f /opt/sysroot/usr/lib/libz.a; \
+    test -f /opt/sysroot/usr/lib/libpcre2-8.a
 ENV TC002_MUSL_SYSROOT=/opt/sysroot
 
 WORKDIR /work

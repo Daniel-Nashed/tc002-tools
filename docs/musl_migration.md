@@ -73,7 +73,8 @@ Stripped sizes of the current artifacts (`dist/`):
   QUIC, SRP, PSK, CMS, CT, TS, CMP, OCSP, the old ciphers and digests, SM2/3/4, Camellia, ARIA, TLS 1.0/1.1. TLS 1.2 and
   1.3 with AES-GCM, ChaCha20 and RSA/ECDSA remain. See [../openssl/README.md](../openssl/README.md).
 - **nginx:** cross-building runs small ARM test programs during `configure`; `build/qemu-cc-wrapper.sh` runs them under
-  `qemu-arm` (with a private root providing the musl loader). No PCRE, so no `return`/`if`/`set`/`rewrite`; the `map`
+  `qemu-arm` (with a private root providing the musl loader). PCRE2 is enabled (regex `location`/`map`, from Alpine's
+  static `pcre2-static` package), but not the rewrite module, so no `return`/`if`/`set`/`rewrite`; the `map`
   module is kept (exact and wildcard names only) and needs `user root;`. The versions of nginx and everything else are in [build_platform.md](build_platform.md#toolchain-and-versions).
 - **7-Zip and other components** got their own trimming (RAR off, `-Os`, `--gc-sections`): 7zz went from 2.27 MB to 1.67 MB.
 - **Build tooling:** every build script prints its elapsed time; `build/build_all_musl.sh` is the in-container driver
