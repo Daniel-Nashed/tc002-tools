@@ -26,9 +26,10 @@ DEVICE_HOSTNAME=
 # least one of DEVICE or DEVICE_IP, or every script refuses to run.
 DEVICE=
 
-# Port Dropbear listens on. Kept off 22 during evaluation intentionally -
-# see docs/security.md.
-SSH_PORT=2222
+# Port Dropbear listens on. The device has no SSH daemon of its own -
+# Dropbear is the only thing that will ever be on this port - so the
+# standard 22 is used; see docs/security.md.
+SSH_PORT=22
 
 # Path to a single SSH public key file to install as authorized_keys.
 # Must be a public key (ssh-ed25519/ssh-rsa/ecdsa-sha2-*/...); private

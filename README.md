@@ -11,7 +11,7 @@ This is an **unofficial**, community project. It is not affiliated with, endorse
 ./pull_build_image.sh             # 1. fetch the ready-made build image (skips ~25 minutes compiling the compiler)
 ./build_all.sh                    # 2. build the core tools (in a disposable container, never on your host)
 ./tc002_setup.sh                  # 3. find your device over ADB and deploy everything to it
-ssh -p 2222 root@<device-ip>      # 4. connect - public-key auth, no password
+ssh root@<device-ip>              # 4. connect - public-key auth, no password
 ```
 
 Step 1 is optional and explicit: without it, `./build_all.sh` builds the image itself on the first run (or build it

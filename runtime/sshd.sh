@@ -64,7 +64,7 @@ HOST_KEY="/data/home/dropbear_ed25519_host_key"
 PID_FILE="/tmp/dropbear.pid"
 LOG_DIR="/tmp/log"
 LOG_FILE="${LOG_DIR}/dropbear.log"
-SSH_PORT="2222"
+SSH_PORT="22"
 FOREGROUND=0
 
 log()

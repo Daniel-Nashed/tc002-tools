@@ -52,6 +52,8 @@ can also be left out of a build entirely (`make CHECKSUMS=0`, see "Build").
 | `nshbox sha384sum [--json\|--JSON] [file ...]` | no | SHA-384 checksums, coreutils-output-compatible (or a JSON array, compact or pretty). |
 | `nshbox sha512sum [--json\|--JSON] [file ...]` | no | SHA-512 checksums, coreutils-output-compatible (or a JSON array, compact or pretty). |
 | `nshbox md5sum [--json\|--JSON] [file ...]` | no | MD5 checksums, coreutils-output-compatible (or a JSON array, compact or pretty). |
+| `nshbox totp --secret <value> [--text]` / `--url <otpauth-uri>` / `--file <path>` `[--algorithm/--digits/--period/--time]` | no | RFC 6238 TOTP code - see below. |
+| `nshbox serve [--listen host:port] [--unix [path]] [--unix-mode mode] [--secret name=path] [--foreground]` | no | `GET /status`, `POST /totp` over TCP and/or a UNIX socket - see below. |
 | `nshbox base64 [-d] [-u] [-w cols] [file]` | no | Base64 encode/decode; `-u` for the URL-safe alphabet, `-w` to change/disable line-wrapping - see below. |
 | `nshbox jwt [--all\|--header] [token]` | no | Decode a JWT's payload (`--header` for header, `--all` for both) as raw JSON - no signature verification - see below. |
 | `nshbox json [file]` | no | Pretty-print JSON, 2-space indent - reads stdin or a file; also available as `--JSON`/`--Json` on any command above that supports `--json` - see below. |
@@ -59,6 +61,7 @@ can also be left out of a build entirely (`make CHECKSUMS=0`, see "Build").
 | `nshbox hostname [-f]` | no | Print the system hostname; `-f` resolves it to a fully-qualified name via `/etc/hosts`/DNS. |
 | `nshbox dig [--json\|--JSON] <name> [A\|CNAME\|MX\|TXT\|PTR]` / `dig -x <ip>` | no | DNS lookup, `dig`-style simplified ANSWER SECTION output (or a JSON array, compact or pretty); `-x` = reverse lookup, IP to name - see below. |
 | `nshbox nslookup [--json\|--JSON] [-type=A\|CNAME\|MX\|TXT\|PTR] <name\|ip>` | no | DNS lookup, `nslookup`-style output (or a JSON array, compact or pretty); an IP address is looked up in reverse - see below. |
+| `nshbox netcat\|nc <host> <port>` / `-l <port>` / `-U <path>` / `-l -U <path>` | no | Connect or listen-once, TCP or a UNIX socket, relay stdin/stdout - see below. |
 | `nshbox install [-f] [-q]` | **yes** | Create BusyBox-style applet symlinks - see below. |
 
 Four commands mutate device state: `install` (creates symlinks in its own directory), `tee` (writes files when
@@ -336,7 +339,7 @@ no archive file on either end. The real use case: the *host's own* `tar` (always
 into `nshbox tar -x` on the device (which has no `tar` of its own) over `ssh`:
 
 ```sh
-tar -cf - -C dist ncdu-terminfo | ssh -p 2222 root@DEVICE_IP 'nshbox tar -x -f - -C /data/share'
+tar -cf - -C dist ncdu-terminfo | ssh root@DEVICE_IP 'nshbox tar -x -f - -C /data/share'
 ```
 
 **Use `ssh`, not `adb shell`, for this.** Confirmed on a real device (2026-09-12): the exact same archive bytes,
@@ -493,6 +496,35 @@ including a real CNAME chain (`www.wikipedia.org` -> `dyna.wikimedia.org`) and a
 empty target on first look seemed like a bug - turned out to be `example.com`'s real, correct "null MX" record
 (RFC 7505: explicitly advertises that the domain accepts no mail), not a parsing error.
 
+## netcat and nc
+
+```sh
+nshbox nc 127.0.0.1 8080            # TCP connect
+nshbox nc -l 8080                   # TCP listen, accept one connection, then relay
+nshbox nc -U /tmp/nshbox.sock       # UNIX socket connect
+nshbox nc -l -U /tmp/nshbox.sock    # UNIX socket listen, accept one connection, then relay
+```
+
+A small tool for testing TCP and UNIX-domain-socket endpoints on the device - this project's own nginx/curl, and
+eventually `nshbox serve`'s own HTTP API. `nc` is a plain alias for `netcat` (same binary, same behavior - pick
+whichever name you type). **Not a claim of compatibility with any particular real netcat** - BSD `nc`, GNU
+`netcat` and `ncat` already disagree with each other on flags, so this is a small, clearly documented subset
+instead: relays stdin to the socket and the socket to stdout, both directions at once via `poll()` (no threads).
+Reaching the end of stdin half-closes the socket's write side (a real TCP `FIN`/graceful UNIX-socket shutdown, so
+the other end sees exactly what a real pipe would give it) while still reading whatever it sends back; the
+connection closing stops that half instead. Useful for a one-liner like `printf 'GET / HTTP/1.0\r\n\r\n' | nshbox
+nc 127.0.0.1 8080` against something this project's own tools are running.
+
+`-l` **listens for exactly one connection, then relays and exits** - a debug tool, not a server (`nshbox serve` is
+the persistent version, not implemented yet). TCP listen binds the wildcard address (all interfaces); there is no
+`-s`/bind-address flag yet. UNIX listen removes a stale socket file left at that path by an earlier run first -
+but only if it really is a socket, never an unrelated file that happens to already be there - and removes it again
+once the one connection has been accepted (a path removal does not affect an already-accepted connection).
+
+Host resolution (`nc host port`) goes through `getaddrinfo()`, the same call `hostname -f` above already uses -
+handles a plain IP address or a real hostname, IPv4 or IPv6, uniformly, trying each result in turn until one
+actually connects.
+
 ## base64 and jwt
 
 ```sh
@@ -529,6 +561,271 @@ decoder site: the token never has to leave the device at all. **Prefer piping th
 passing it as an argument** (`echo "$TOKEN" | nshbox jwt`) where the choice is yours - an argument lands in this
 process's own `/proc/<pid>/cmdline` and in `ps` output for as long as it runs, visible to any other user who can
 see the device's process table; stdin does not.
+
+## totp
+
+```sh
+nshbox totp --secret JBSWY3DPEHPK3PXP                        # 6-digit code, current time, SHA256
+nshbox totp --secret JBSW Y3DP EHPK 3PXP                     # whitespace in a copied secret is fine
+nshbox totp --secret JBSWY3DPEHPK3PXP --digits 8             # 8-digit code
+nshbox totp --secret JBSWY3DPEHPK3PXP --algorithm sha1       # HMAC-SHA1, for a secret shared with a phone authenticator app
+nshbox totp --secret "correct horse battery staple" --text   # a plain-text secret, not Base32
+nshbox totp --secret JBSWY3DPEHPK3PXP --time 1234567890      # a specific moment, not "now" - deterministic
+nshbox totp --url 'otpauth://totp/Example:me?secret=JBSWY3DPEHPK3PXP&issuer=Example'
+                                                               # a provisioning URI, e.g. from a QR code
+nshbox totp --file secret.txt                                 # a bare Base32 secret from a file
+nshbox totp --file uri.txt                                    # an otpauth:// URI from a file
+nshbox totp --file request.json                                # a JSON request (and response) instead - see below
+```
+
+```text
+$ nshbox totp --secret JBSWY3DPEHPK3PXP
+483921
+```
+
+RFC 6238 TOTP (RFC 4226 HOTP dynamic truncation underneath), HMAC computed with mbedTLS's existing low-level digest
+functions - the same ones the checksum commands above use, not the generic `mbedtls_md.h` dispatcher, for the same
+reason (see "Why the checksums use mbedTLS, not OpenSSL" below): a hand-written HMAC (RFC 2104, ipad/opad) over a
+known, fixed algorithm links in far less than the generic layer would. Output is **only the code and a newline** -
+nothing else, on purpose, so it drops straight into a script (`TOTP=$(nshbox totp --secret ...)`) with no parsing
+(a `*.json` `--file`, below, is the one exception). Defaults: **SHA256**, 6 digits, a 30-second period. The digits
+and period match what essentially every TOTP app and service uses; the algorithm deliberately does not - SHA1 is
+only the de facto standard because phone authenticator apps (Google/Microsoft Authenticator, Authy) hardcode it
+and support nothing else, a constraint that does not apply here (this is meant for a shared secret between this
+project's own tools, not for scanning into a phone app). Pass `--algorithm sha1` for a secret that does need to go
+into one of those apps, or `--algorithm sha512` for the strongest option offered. `--digits` is 6, 7 or 8.
+
+## totp: three ways to give it a secret
+
+`--secret`, `--url` and `--file` are mutually exclusive - exactly one of them, every time.
+
+**`--secret <value>`** is Base32 (RFC 4648) by default - the from-scratch decoder tolerates a missing `=` padding
+tail, lowercase letters, and whitespace anywhere in the value, since that is how a real secret is usually handed
+out (an "add account" QR code's payload, Google Authenticator, a setup key copied as four-character groups like
+`JBSW Y3DP EHPK 3PXP`, and this project's own examples above are all like this). **`--text`** changes that: with it,
+`--secret` is used exactly as given, as the raw HMAC key bytes, with no decoding at all - not an unusual thing for a
+TOTP secret to be (RFC 6238's own Appendix B test vectors are themselves plain ASCII text, not Base32). `--text`
+only ever modifies `--secret`; it is rejected in combination with `--url` or `--file`.
+
+**`--url <otpauth-uri>`** parses a standard `otpauth://totp/<label>?secret=...&issuer=...&algorithm=...&digits=...
+&period=...` provisioning URI - the same format a phone authenticator app's "add account" QR code encodes.
+`otpauth://hotp/...` is rejected outright, deliberately never silently treated as TOTP. `label` and `issuer` are
+parsed only far enough to skip past them (they have no effect on the calculation, and there is nowhere to show
+them from a bare-code CLI). The URI's own `secret` is always Base32 (`--text` does not apply here); `algorithm`,
+`digits` and `period` each fall back to their own default (`sha1`, `6`, `30` - **note the URI's own algorithm
+default is `sha1`, not `--secret`'s `sha256`** - RFC 6238's own ecosystem default, not this project's) if the URI
+does not set them, but an **explicit `--algorithm`/`--digits`/`--period` on the command line always wins over
+whatever the URI says** - built-in defaults < the URI's own values < an explicit flag. `--time` is never taken from
+a URI at all, only an explicit `--time` or the current system clock, same as every other input mode.
+
+**`--file <path>`** (`-` for stdin) depends on the filename, not a guess at the content: a path ending in `.json`
+(case-insensitively) is the JSON request/response shape below; anything else (including stdin, which has no
+filename to check) is read, has its surrounding whitespace trimmed (an editor's trailing newline must not become
+part of the secret), and is then either an `otpauth://` URI (parsed exactly like `--url` above, including the same
+CLI-override precedence) or, if it does not start with that, a bare Base32 secret, one per file - never `--text`,
+even implicitly: an ordinary file's contents are never treated as literal-text key bytes.
+
+`--time` fixes the timestamp instead of using the system clock (`time(NULL)`) - this is what makes the RFC 6238
+Appendix B test vectors deterministic (`tests/nshbox/test_totp.cpp` runs all eighteen of them, SHA1/SHA256/SHA512),
+and it is trusted as given, even a value as small as `59` (one of the RFC's own vectors), with no sanity check.
+Without `--time`, the system clock **is** sanity-checked: the TC002 can run `nshbox` before NTP has synced, and a
+clock still sitting near 1970 would silently produce a TOTP code that looks fine and is completely wrong - `totp`
+refuses instead, with a clear message, rather than printing a code nobody's authenticator would ever agree with.
+
+**Prefer `--file` or an environment variable over `--secret`/`--url` directly**, for the same reason `jwt` above
+prefers stdin: a command-line argument lands in this process's own `/proc/<pid>/cmdline` and in `ps` output for as
+long as it runs, visible to any other user who can see the device's process table - and an otpauth URI is just as
+sensitive as the bare secret, since it contains one. Nothing here - a `--secret`/`--url` value, a Base32 secret, the
+decoded key bytes, or a complete otpauth URI - is ever logged or echoed back in an error message, in any input
+mode; decoded key material is cleared from memory once a code has been computed from it.
+
+## totp: JSON request/response (a `*.json` `--file`, and `nshbox serve`'s `POST /totp`)
+
+```json
+{"secret": "JBSWY3DPEHPK3PXP", "encoding": "base32", "algorithm": "sha256", "digits": 6, "period": 30, "time": 1790658000}
+```
+
+```json
+{"code": "483921", "period": 30, "remaining": 17, "time": 1790658000}
+```
+
+A `--file <path>` ending in `.json` reads a request in **exactly this shape** from the file, and prints the matching
+response shape back - not the bare code, since the point is previewing/testing the same contract `nshbox serve`'s
+`POST /totp` accepts and returns over HTTP, without needing a running server at all. Only `secret` is required; every
+other field defaults exactly the way the CLI flags do (`base32`, `sha256`, `6`, `30`, the current sanity-checked
+system time). `code` is a JSON **string** deliberately, so a leading zero survives. `remaining` is how many seconds
+are left before this exact code changes (`period - (time % period)`, always in `(0, period]` - a code that just
+started its window still has the *whole* period left, not zero). `time` in the response is the timestamp actually
+used, whether it came from the request or from the system clock. A `*.json` `--file` is fully self-contained: it
+cannot be combined with `--algorithm`/`--digits`/`--period`/`--time` (unlike an otpauth-URI or bare-secret `--file`
+above, where those flags do apply, as overrides) - the whole request comes from the file, or none of it does.
+
+On a bad request, the response is `{"error": "<message>"}` instead, with a non-zero exit code - `nshbox totp --file`
+always prints one JSON document or the other to stdout, exactly what an HTTP client would receive as the response
+body. Every error message is one of a small set nshbox itself chooses (`missing secret`, `invalid Base32 secret`,
+`invalid secret` for `text` encoding, `invalid encoding`, `invalid algorithm`, `invalid digits`, `invalid period`,
+`invalid time`, `malformed JSON`, `system clock is not set yet`, `could not compute a code`) - **never anything
+copied from the request**, so it can never echo the secret back, the same rule the CLI's own error messages follow.
+A file that cannot be opened, or is too large (4096 bytes - generous for this shape), fails with a plain message on
+stderr instead, before any JSON parsing is attempted - that is a host-side file problem, not a malformed request.
+
+The request parser is deliberately small, not a general JSON parser (see `json` below for that different job): a
+Base32 secret's whole alphabet (`A-Z2-7`) can never legally contain a character that needs JSON-escaping, and
+neither can a `text` secret meant for this purpose or an algorithm name, so a backslash or a raw control byte in
+any of them is already a malformed request, rejected rather than decoded. Unknown keys in the request object are
+ignored, not rejected - normal REST API tolerance.
+
+The same request/response shape is also what `nshbox serve`'s `POST /totp` accepts and returns, over a real TCP or
+UNIX-socket connection - see the `serve` section below, which reuses this exact parsing/building code (not a second
+implementation of it). `totp` and `serve` both need the same mbedTLS as the checksum commands, so both are left out
+of a `CHECKSUMS=0` build the same way they are (`nshbox --version` then shows `(no checksum/totp/serve commands)`).
+
+## serve
+
+```sh
+nshbox serve --listen 127.0.0.1:8787                      # TCP only
+nshbox serve --unix                                        # UNIX socket only, at the default /tmp/nshbox.sock
+nshbox serve --unix /tmp/my.sock --unix-mode 0660          # a specific path and permission
+nshbox serve --listen 127.0.0.1:8787 --unix                # both at once
+nshbox serve --unix --secret device1=/data/nshbox/device1.secret --secret backup=/data/nshbox/backup.json
+```
+
+A small, persistent HTTP API: exactly `GET /status` and `POST /totp` - deliberately not more. The router is a
+handful of purpose-written handlers, never a generic "run any nshbox command over HTTP" bridge - adding a command
+elsewhere in this file never silently exposes it here too; a third route would be its own deliberate addition, not
+automatic. No TLS is implemented here at all, and the only authentication is the optional per-secret token described
+below - put NGINX in front for TLS, or for anything more, when remote access is genuinely wanted (see
+[../docs](../docs) for this project's own NGINX build); a UNIX socket plus an NGINX reverse proxy in front of it is
+the intended shape for that, not exposing `--listen` past `127.0.0.1` directly.
+
+**`--listen <address:port>`** always needs the exact address and port - there is no default, deliberately: this is
+the network-facing option, and typing it out every time is a small, one-time cost for never accidentally exposing a
+listener on an address nobody chose. A literal IPv6 address needs brackets (`[::1]:8787`). **`--unix [<path>]`** may
+be given with no path at all, defaulting to `/tmp/nshbox.sock` - the default is safe to leave implicit precisely
+because a UNIX socket is filesystem-permission-gated, not network-exposed, the same reasoning that does not extend
+to `--listen`. A stale socket file left by an earlier run is removed automatically, but only if it really is a
+socket (never an unrelated file that happens to already be at that path). **`--unix-mode <octal>`** sets the
+socket's permission bits, default `0600` (owner only) - on the TC002 specifically this is somewhat academic, since
+everything there already runs as root (confirmed by nginx's own `user root;` requirement - no `nobody` account
+exists on the device), but it matters on any ordinary multi-user Linux box this same binary also runs on. At least
+one of `--listen`/`--unix` is required; both may be given together.
+
+**By default, once startup succeeds (listeners bound, any `--secret`/default-secret file loaded), `serve` backgrounds
+itself** - forks, the parent prints where the log went and exits immediately (no need for the caller's own trailing
+`&`), the child detaches from the controlling terminal (`setsid()`) and sends its stdout/stderr to
+`/tmp/log/nshbox-serve.log` (created if needed, appended across restarts), writing its own PID to
+`/tmp/nshbox-serve.pid` - the same flat-under-`/tmp` convention `runtime/sshd.sh` already uses for Dropbear, and for
+the same reason (boot-scoped state belongs on this device's tmpfs, not flash). Anything that fails before the fork
+(a bad `--listen`/`--unix`, a bad `--secret` file, the log file itself being unwritable) is still reported directly
+on the caller's own terminal, not silently lost to a log nobody is watching yet - `serve: running in background, pid
+<N>` is the first line the log file itself ever gets, confirming from the log alone (not just the terminal output
+you may not have kept) that the daemon actually came up; after that, every failed request logs its own line (see
+below), and a clean shutdown adds one final `serve: shut down`. **`--foreground`** stays attached
+instead - runs exactly as every other nshbox command does, logs straight to the real stderr, writes no PID file;
+useful for `adb shell`, interactive testing, or running under something that already supervises the process itself
+(systemd, a container's own PID 1).
+
+```sh
+nshbox serve --listen 127.0.0.1:8787              # backgrounds; check /tmp/log/nshbox-serve.log
+kill "$(cat /tmp/nshbox-serve.pid)"                # stop it
+
+nshbox serve --listen 127.0.0.1:8787 --foreground  # stays attached, Ctrl-C to stop
+```
+
+**`--secret <name>=<path>` (repeatable) protects the actual secret value from ever being sent to `POST /totp` at
+all.** Each one loads a secret once, at startup, from `<path>` - the same three shapes `totp --file`/`--url` already
+accept (a `*.json` request object with its own `secret`/`encoding`/`algorithm`/`digits`/`period`, an `otpauth://`
+URI, or a bare Base32 secret) - and keeps only the decoded result in memory under `<name>` for the life of the
+process; the file is never re-read per request. Once at least one `--secret` is configured, `POST /totp`'s request
+shape changes from `{"secret": ...}` to `{"name": "...", "token": "...", "time": ...}` - it selects one of the
+configured secrets **by name**, never by sending a secret or a file path of its own (`secret`/`encoding`/
+`algorithm`/`digits`/`period` in the request are rejected outright in this mode, with a fixed error, so a caller can
+never wrongly assume one of them took effect). `name` may be omitted only when exactly one secret is configured -
+with more than one, an unnamed request is rejected as ambiguous, same as an unrecognized name. A failed/unreadable/
+malformed `--secret` file is fatal at startup (a clear message on stderr, never the secret itself) - `serve` never
+comes up half-configured. With no `--secret` at all, `POST /totp` falls back to today's shape (a `secret` directly
+in the request) - fully backward compatible.
+
+A `*.json` secret file may also set an optional `"token"` - a shared string `POST /totp` must then present as this
+same secret's own `"token"` field, or get `401 Unauthorized` with **no response body at all** (unlike every other
+error this endpoint returns) - a missing and a wrong token are never distinguished, and the status code alone
+already says everything a caller needs to know, so a message would only repeat it in words. A secret with no
+`"token"` set needs none. This is a lightweight, optional check for this one endpoint, not a general authentication
+system - it has no notion of users, sessions, or rate-limiting, and, like everything else in `serve`, is not a
+substitute for TLS when the traffic leaves a trusted host.
+
+With **no** `--secret` given at all, `serve` also checks one well-known path, `/data/nshbox/totp.secret.json`, and
+loads it automatically (as the single default secret) if it exists - so the common single-secret case needs no flag
+at all, just that file in place. It ends in `.json` like any other named secret's `.json` file would (see
+`totp_file_is_json()`'s extension-based dispatch above) so it can carry a `"token"` too - a bare-secret or
+`otpauth://` file only works when given a name explicitly via `--secret`, since this one fixed path can't itself be
+renamed to signal which shape it is. If it does not exist either, `POST /totp` stays in the plain, no-name-required
+legacy shape.
+
+**Response format: plain text by default, JSON on request.** Each route has its own default body shape; sending
+`Accept: application/json` switches that route to its JSON shape instead - a simple presence check on `Accept`
+(`application/json` mentioned anywhere in it), not full HTTP content negotiation (no `q` weights, no preference
+ordering). Both routes default to plain text because that is the more useful shape for a script or shell one-liner
+piping the body straight into something else (a TOTP code into a login prompt, say) - a plain-text body is always
+exactly the value, with **no trailing newline**, so nothing needs to be stripped from it.
+
+```text
+$ curl http://127.0.0.1:8787/status
+ok
+$ curl -H 'Accept: application/json' http://127.0.0.1:8787/status
+{"status":"ok","version":"0.9.0","uptime":42}
+
+$ curl -X POST --data '{"secret":"JBSWY3DPEHPK3PXP"}' http://127.0.0.1:8787/totp    # no --secret configured
+483921
+$ curl -H 'Accept: application/json' -X POST --data '{"secret":"JBSWY3DPEHPK3PXP"}' http://127.0.0.1:8787/totp
+{"code":"483921","period":30,"remaining":17,"time":1790658000}
+
+$ curl -X POST --data '{"name":"device1"}' http://127.0.0.1:8787/totp             # --secret device1=... configured
+483921
+$ curl -i -X POST --data '{"name":"device1","token":"wrong"}' http://127.0.0.1:8787/totp   # device1's file set a token
+HTTP/1.1 401 Unauthorized
+Content-Type: text/plain
+Content-Length: 0
+Connection: close
+```
+
+`GET /status` never touches `totp` or mbedTLS at all - a plain health check, for NGINX upstream checks or just
+confirming the process is alive. Its JSON shape (`{"status":"ok","version":"<nshbox --version>","uptime":<seconds
+since this "serve" process started>}`) adds the version and uptime for a human or a monitoring script that wants
+more than a bare "ok"; the plain-text default stays just `ok`, on purpose, to keep the common case (a liveness
+probe) a one-word answer. `POST /totp` takes exactly the request shape documented above; on success its plain-text
+default is just the code, its JSON shape the full `{"code":...,"period":...,"remaining":...,"time":...}` object. A
+bad request gets HTTP `400` with the matching error shape - the same fixed error message text either directly as
+the plain-text body or wrapped as `{"error": "..."}`, following the same Accept-based choice. Other HTTP-level
+failures (`404` unknown path, `405` right path wrong method - `GET /totp`, `POST /status`; `401` a missing/wrong
+token, when named secrets are configured) follow that same plain-text-or-JSON choice too. `413` (request too large)
+and `400` for a malformed request line/headers are always JSON - both happen before or during header parsing, too
+early to know what the client's own `Accept` said. `500` is only for this server's own response-building somehow
+failing (never expected, still handled rather than crashing or hanging). Every response is `Connection: close` -
+there is no keep-alive (a second request needs its own new connection) and no chunked bodies are understood on the
+way in either; both are deliberately left out; this project's own requests and responses are tiny, so the
+complexity of either would buy nothing here.
+
+`SIGTERM`/`SIGINT` shut it down cleanly: every open connection and listener is closed, and a UNIX socket file this
+process created is removed again.
+
+**Every failed request is logged to stderr**, one line per failure (`serve: <method> <path> -> <status> <text>:
+<message>`, e.g. `serve: POST /totp -> 401 Unauthorized: invalid or missing token`) - this is deliberate: the network
+response itself stays minimal (a small fixed message, or nothing at all for `401` - see above), so this stderr line
+is the only place the actual reason is ever visible at all, and it is always there, even for `401` where the caller
+gets nothing back. The two lines are never the same content, though: like every response body here, a log line is
+always one of this file's own fixed, static messages - it still never contains a secret, a token, a request body, a
+decoded key, or a generated code, in any input mode. Beyond that, the only other things ever printed are the two
+startup lines (`listening on ...`), one on shutdown, and (only when `--secret`/the default secret file is used) one
+line naming which default secret file was picked up.
+
+Not implemented, deliberately, for this first version: TLS, a general authentication/authorization system (users,
+sessions, rate-limiting - the optional per-secret `token` above is a narrow exception, not a replacement for any of
+that), a web UI, persistent secret storage beyond the files `--secret` reads once at startup, HOTP counter
+persistence, and threads (one `poll()` loop, no concurrency beyond that - see this file's own "serve" section for
+the reasoning, including why a response is written with a single blocking call rather than driven by `poll()`'s own
+write-readiness: every response here is a few hundred bytes to a local peer, so this cannot meaningfully stall the
+loop in practice).
 
 ## json
 
@@ -681,8 +978,9 @@ MBEDTLS_DIR=<prefix> STATIC=1` from inside that container. Its options:
   `libmbedcrypto.a` that [../build/build_mbedtls.sh](../build/build_mbedtls.sh) builds. Left empty, the system's
   `libmbedtls-dev` is used, which is what the Ubuntu test container has (a plain dynamic glibc build for the
   functional test suite, `make CROSS=`). `nshbox.c` works with mbedTLS 3.x and 2.x.
-- `CHECKSUMS=0` (`-DNSHBOX_NO_CHECKSUMS`) leaves out `sha256sum`, `sha1sum`, `sha384sum`, `sha512sum` and
-  `md5sum`, so mbedTLS is not needed to build at all; `nshbox --version` then shows `(no checksum commands)`.
+- `CHECKSUMS=0` (`-DNSHBOX_NO_CHECKSUMS`) leaves out `sha256sum`, `sha1sum`, `sha384sum`, `sha512sum`, `md5sum`,
+  `totp` and `serve`, so mbedTLS is not needed to build at all; `nshbox --version` then shows
+  `(no checksum/totp/serve commands)`.
 
 `grep` uses POSIX regex (`<regex.h>`) from the standard C library, so it adds no dependency beyond libc.
 

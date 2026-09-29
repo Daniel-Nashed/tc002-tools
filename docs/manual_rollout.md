@@ -175,8 +175,9 @@ file) - without that, the detached daemon kept the invoking `adb shell` session'
 directly, 2026-09-13) - which is exactly what makes `start_dropbear.sh` safe to call as a plain, single blocking
 step from `tc002_setup.sh`. Always passes `-s` (disables password authentication explicitly, as defense in depth -
 it is already compiled out, see [dropbear.md](dropbear.md), but this makes the intent explicit in the running
-process too), `-p 2222` (see [security.md](security.md) for why this project stays off port 22 during evaluation),
-and `-P /tmp/dropbear.pid` so Dropbear writes its own PID file - see [device_layout.md](device_layout.md#pid-file).
+process too), `-p 22` (the standard port - see [security.md](security.md), the device has no SSH daemon of its own to
+collide with), and `-P /tmp/dropbear.pid` so Dropbear writes its own PID file - see
+[device_layout.md](device_layout.md#pid-file).
 
 To watch the log directly instead - e.g. while debugging a failed connection - run it in the foreground
 (`-f` is passed straight through by `init.sh` to `sshd.sh`):
@@ -197,11 +198,11 @@ tests/test_device_access.sh
 Or by hand:
 
 ```sh
-ssh -p 2222 root@DEVICE_IP
+ssh root@DEVICE_IP
 ```
 
 ```sh
-ssh -p 2222 root@DEVICE_IP 'id; echo "$HOME"; echo "$PATH"; command -v scp'
+ssh root@DEVICE_IP 'id; echo "$HOME"; echo "$PATH"; command -v scp'
 ```
 
 Expect:
@@ -216,7 +217,7 @@ uid=0(root) gid=0(root)
 SCP (Dropbear has no SFTP server, so OpenSSH's client must be told to use the original SCP protocol explicitly):
 
 ```sh
-scp -O -P 2222 FILE root@DEVICE_IP:/data/
+scp -O FILE root@DEVICE_IP:/data/
 ```
 
 Verify upload integrity with a checksum on both sides (`tests/test_device_access.sh` does this automatically with a

@@ -54,6 +54,10 @@
  *   nshbox sha384sum [--json] [file ...]
  *   nshbox sha512sum [--json] [file ...]
  *   nshbox md5sum [--json] [file ...]
+ *   nshbox totp --secret <base32|text> [--text] [--algorithm sha1|sha256|sha512] [--digits 6|7|8] [--period s] [--time unix]
+ *   nshbox totp --url <otpauth-uri> [--algorithm ...] [--digits ...] [--period ...] [--time unix]
+ *   nshbox totp --file <path|->   (*.json request, or an otpauth:// URI / bare Base32 secret)
+ *   nshbox serve [--listen <address:port>] [--unix [<path>]] [--unix-mode <octal>] [--secret <name>=<path>]... [--foreground]
  *   nshbox base64 [-d] [-u] [-w cols] [file]
  *   nshbox jwt [--all|--header] [token]
  *   nshbox json [file]
@@ -62,6 +66,10 @@
  *   nshbox dig [--json] <name> [A|CNAME|MX|TXT|PTR]
  *   nshbox dig [--json] -x <ip>
  *   nshbox nslookup [--json] [-type=A|CNAME|MX|TXT|PTR] <name|ip>
+ *   nshbox netcat|nc <host> <port>            (TCP connect)
+ *   nshbox netcat|nc -l <port>                (TCP listen, accept one connection)
+ *   nshbox netcat|nc -U <path>                (UNIX socket connect)
+ *   nshbox netcat|nc -l -U <path>              (UNIX socket listen, accept one connection)
  *   nshbox find [path ...] [-name pattern] [-type f|d|l] [-maxdepth n] [--json]
  *   nshbox tree [-L level] [path]
  *   nshbox tar -c|-x|-t[z] -f archive [-C dir] [path ...]
@@ -89,11 +97,14 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/utsname.h>
 #include <sys/statvfs.h>
 #include <netinet/in.h>
 #include <fnmatch.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #ifndef NSHBOX_NO_CHECKSUMS
 #include <mbedtls/version.h>
 #include <mbedtls/md5.h>
@@ -110,10 +121,13 @@
 /* NSHBOX_VERSION: the single source of truth for the version (also the release version) */
 #include "version.h"
 
-/* Shown after the version, so a "command not found" for sha256sum etc. is
- * explained by the banner instead of looking like a bug. */
+/* Shown after the version, so a "command not found" for sha256sum/totp/
+ * serve etc. is explained by the banner instead of looking like a bug -
+ * totp and serve both need the same mbedTLS this flag already leaves
+ * out (serve's only current route that does, POST /totp, reuses totp's
+ * own code directly - see this file's own "serve" section). */
 #ifdef NSHBOX_NO_CHECKSUMS
-#define NSHBOX_VARIANT    " (no checksum commands)"
+#define NSHBOX_VARIANT    " (no checksum/totp/serve commands)"
 #else
 #define NSHBOX_VARIANT    ""
 #endif
@@ -5238,6 +5252,420 @@ static int cmd_nslookup(int argc, char **argv)
 
 
 /* ------------------------------------------------------------------ */
+/* netcat / nc                                                        */
+/*                                                                     */
+/* A small netcat-alike for testing TCP and UNIX-domain-socket         */
+/* endpoints on the device (this project's own nginx/curl, and         */
+/* eventually nshbox's own "serve" HTTP API - see nshbox/README.md).   */
+/* Not a claim of compatibility with any particular real netcat - BSD  */
+/* nc, GNU netcat and ncat all already disagree with each other on     */
+/* flags - a small, clearly documented subset instead: connect or      */
+/* listen-once, TCP or a UNIX socket, relay stdin<->socket with        */
+/* poll(), no threads. First socket/poll() code in this file; the      */
+/* connect/listen/accept helpers below are meant to be reusable        */
+/* groundwork for "serve"'s own listeners later, not just for this.    */
+/* ------------------------------------------------------------------ */
+
+/* Writes exactly n bytes to fd, retrying on a short write or EINTR.
+ * Returns 0 on success, -1 on a real write error (errno set). A write()
+ * returning 0 for n > 0 should not happen for a socket or a pipe, but is
+ * treated as an error rather than risking an infinite retry loop if it
+ * ever somehow does. */
+static int netcat_write_all(int fd, const unsigned char *buf, size_t n)
+{
+    size_t off = 0;
+
+    while (off < n) {
+        ssize_t w = write(fd, buf + off, n - off);
+
+        if (w < 0) {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+
+        if (w == 0) {
+            errno = EIO;
+            return -1;
+        }
+
+        off += (size_t)w;
+    }
+
+    return 0;
+}
+
+/* Relays data bidirectionally between stdin/stdout and sock, via poll() -
+ * no threads, matching this project's usual "keep it small" approach.
+ * Runs until both directions are done: stdin reaching EOF half-closes the
+ * socket's write side (shutdown SHUT_WR) so the peer sees the same EOF a
+ * real pipe would give it, while nc keeps reading whatever the peer still
+ * has to send; the socket reaching EOF (the peer closed its side) simply
+ * stops that side of the relay, independent of whether stdin is still
+ * open. Checking a whole nonzero revents (not just masking POLLIN) is
+ * deliberate: POLLHUP/POLLERR are reported by the kernel regardless of
+ * what was requested in events, and a following read() call is exactly
+ * how their EOF/error is actually detected and reported below. Returns 0
+ * normally, 1 on an I/O error. */
+static int netcat_relay(int sock)
+{
+    unsigned char buf[65536];
+    int stdin_open = 1;
+    int sock_open = 1;
+
+    while (stdin_open || sock_open) {
+        struct pollfd fds[2];
+        int nfds = 0;
+        int stdin_idx = -1;
+        int sock_idx = -1;
+
+        if (stdin_open) {
+            fds[nfds].fd = STDIN_FILENO;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            stdin_idx = nfds++;
+        }
+
+        if (sock_open) {
+            fds[nfds].fd = sock;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            sock_idx = nfds++;
+        }
+
+        if (poll(fds, (nfds_t)nfds, -1) < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("nc: poll");
+            return 1;
+        }
+
+        if (stdin_idx >= 0 && fds[stdin_idx].revents) {
+            ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+
+            if (n > 0) {
+                if (netcat_write_all(sock, buf, (size_t)n) != 0) {
+                    fprintf(stderr, "nc: write to socket failed: %s\n", strerror(errno));
+                    return 1;
+                }
+            } else {
+                if (n < 0)
+                    fprintf(stderr, "nc: read from stdin failed: %s\n", strerror(errno));
+
+                shutdown(sock, SHUT_WR);
+                stdin_open = 0;
+            }
+        }
+
+        if (sock_idx >= 0 && fds[sock_idx].revents) {
+            ssize_t n = read(sock, buf, sizeof(buf));
+
+            if (n > 0) {
+                if (netcat_write_all(STDOUT_FILENO, buf, (size_t)n) != 0) {
+                    perror("nc: write to stdout");
+                    return 1;
+                }
+            } else {
+                sock_open = 0;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/* TCP connect: getaddrinfo() the same way cmd_hostname's -f already does
+ * (handles a hostname or a numeric address, IPv4 or IPv6, uniformly), then
+ * try each result in turn until one actually connects - the standard
+ * robust pattern for a getaddrinfo() result list, not just using the
+ * first entry blindly. Returns a connected fd, or -1 (having already
+ * printed why) on failure. */
+static int netcat_connect_tcp(const char *host, const char *port)
+{
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *rp;
+    int sock = -1;
+    int r;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    r = getaddrinfo(host, port, &hints, &res);
+
+    if (r != 0) {
+        fprintf(stderr, "nc: %s: %s\n", host, gai_strerror(r));
+        return -1;
+    }
+
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+
+        if (sock < 0)
+            continue;
+
+        if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0)
+            break;
+
+        close(sock);
+        sock = -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (sock < 0) {
+        fprintf(stderr, "nc: could not connect to %s:%s: %s\n", host, port, strerror(errno));
+        return -1;
+    }
+
+    return sock;
+}
+
+/* TCP listen: binds the wildcard address (0.0.0.0/::) on port, accepts
+ * exactly ONE connection, and stops listening immediately afterward - a
+ * one-shot debug tool, not a server (that is what "nshbox serve" is for).
+ * No -s/bind-address option is offered here; add one if a real need for
+ * it ever comes up. Returns the accepted connection's fd, or -1 (having
+ * already printed why) on failure. */
+static int netcat_listen_tcp(const char *port)
+{
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *rp;
+    int listen_sock = -1;
+    int conn_sock;
+    int r;
+    int yes = 1;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    r = getaddrinfo(NULL, port, &hints, &res);
+
+    if (r != 0) {
+        fprintf(stderr, "nc: invalid port %s: %s\n", port, gai_strerror(r));
+        return -1;
+    }
+
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        listen_sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+
+        if (listen_sock < 0)
+            continue;
+
+        setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+        if (bind(listen_sock, rp->ai_addr, rp->ai_addrlen) == 0)
+            break;
+
+        close(listen_sock);
+        listen_sock = -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (listen_sock < 0) {
+        fprintf(stderr, "nc: could not bind port %s: %s\n", port, strerror(errno));
+        return -1;
+    }
+
+    if (listen(listen_sock, 1) != 0) {
+        perror("nc: listen");
+        close(listen_sock);
+        return -1;
+    }
+
+    fprintf(stderr, "nc: listening on port %s, waiting for one connection...\n", port);
+
+    conn_sock = accept(listen_sock, NULL, NULL);
+    close(listen_sock);
+
+    if (conn_sock < 0) {
+        perror("nc: accept");
+        return -1;
+    }
+
+    return conn_sock;
+}
+
+/* UNIX socket connect. Returns a connected fd, or -1 (having already
+ * printed why) on failure. */
+static int netcat_connect_unix(const char *path)
+{
+    struct sockaddr_un addr;
+    int sock;
+
+    if (strlen(path) >= sizeof(addr.sun_path)) {
+        fprintf(stderr, "nc: UNIX socket path too long: %s\n", path);
+        return -1;
+    }
+
+    sock = socket(AF_UNIX, SOCK_STREAM, 0);
+
+    if (sock < 0) {
+        perror("nc: socket");
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, path);
+
+    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        fprintf(stderr, "nc: could not connect to %s: %s\n", path, strerror(errno));
+        close(sock);
+        return -1;
+    }
+
+    return sock;
+}
+
+/* UNIX socket listen: removes a stale socket FILE left at path by an
+ * earlier run (only ever if it really is a socket - never an unrelated
+ * file that happens to already exist there), binds, accepts exactly ONE
+ * connection (one-shot, same as netcat_listen_tcp() above), then removes
+ * the socket file again - unlinking a path does not affect an already-
+ * accepted connection's own fd, only a future connect() to that path, and
+ * there will be no more of those once this has stopped listening. Returns
+ * the accepted connection's fd, or -1 (having already printed why) on
+ * failure. */
+static int netcat_listen_unix(const char *path)
+{
+    struct sockaddr_un addr;
+    struct stat st;
+    int listen_sock;
+    int conn_sock;
+
+    if (strlen(path) >= sizeof(addr.sun_path)) {
+        fprintf(stderr, "nc: UNIX socket path too long: %s\n", path);
+        return -1;
+    }
+
+    if (lstat(path, &st) == 0) {
+        if (!S_ISSOCK(st.st_mode)) {
+            fprintf(stderr, "nc: %s already exists and is not a socket - not removing it\n", path);
+            return -1;
+        }
+
+        if (unlink(path) != 0) {
+            fprintf(stderr, "nc: could not remove stale socket %s: %s\n", path, strerror(errno));
+            return -1;
+        }
+    }
+
+    listen_sock = socket(AF_UNIX, SOCK_STREAM, 0);
+
+    if (listen_sock < 0) {
+        perror("nc: socket");
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, path);
+
+    if (bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        fprintf(stderr, "nc: could not bind %s: %s\n", path, strerror(errno));
+        close(listen_sock);
+        return -1;
+    }
+
+    if (listen(listen_sock, 1) != 0) {
+        perror("nc: listen");
+        close(listen_sock);
+        unlink(path);
+        return -1;
+    }
+
+    fprintf(stderr, "nc: listening on %s, waiting for one connection...\n", path);
+
+    conn_sock = accept(listen_sock, NULL, NULL);
+    close(listen_sock);
+    unlink(path);
+
+    if (conn_sock < 0) {
+        perror("nc: accept");
+        return -1;
+    }
+
+    return conn_sock;
+}
+
+static int cmd_netcat(int argc, char **argv)
+{
+    static const char usage_msg[] =
+        "Usage: nshbox nc <host> <port>   (TCP connect)\n"
+        "       nshbox nc -l <port>       (TCP listen, accept one connection)\n"
+        "       nshbox nc -U <path>       (UNIX socket connect)\n"
+        "       nshbox nc -l -U <path>    (UNIX socket listen, accept one connection)\n";
+
+    int listen_mode = 0;
+    const char *unix_path = NULL;
+    const char *positional[2];
+    int positional_count = 0;
+    int argi;
+    int sock;
+    int rc;
+
+    for (argi = 1; argi < argc; argi++) {
+        if (!strcmp(argv[argi], "-l")) {
+            listen_mode = 1;
+        } else if (!strcmp(argv[argi], "-U")) {
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            unix_path = argv[argi];
+        } else if (argv[argi][0] == '-' && argv[argi][1] != '\0') {
+            fprintf(stderr, "nc: unsupported option: %s\n", argv[argi]);
+            return 2;
+        } else {
+            if (positional_count >= 2) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            positional[positional_count++] = argv[argi];
+        }
+    }
+
+    if (unix_path) {
+        if (positional_count != 0) {
+            fprintf(stderr, "nc: -U takes no HOST/PORT arguments\n");
+            return 2;
+        }
+
+        sock = listen_mode ? netcat_listen_unix(unix_path) : netcat_connect_unix(unix_path);
+    } else if (listen_mode) {
+        if (positional_count != 1) {
+            fprintf(stderr, "%s", usage_msg);
+            return 2;
+        }
+
+        sock = netcat_listen_tcp(positional[0]);
+    } else {
+        if (positional_count != 2) {
+            fprintf(stderr, "%s", usage_msg);
+            return 2;
+        }
+
+        sock = netcat_connect_tcp(positional[0], positional[1]);
+    }
+
+    if (sock < 0)
+        return 1;   /* the helper already printed why */
+
+    rc = netcat_relay(sock);
+    close(sock);
+    return rc;
+}
+
+
+/* ------------------------------------------------------------------ */
 /* Command table                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -7136,6 +7564,3058 @@ static int cmd_md5sum(int argc, char **argv)
  * No SHA3 commands here - nothing has asked for them so far.
  */
 
+
+/* ------------------------------------------------------------------ */
+/* totp - RFC 6238 TOTP (RFC 4226 HOTP dynamic truncation)             */
+/* ------------------------------------------------------------------ */
+
+/* RFC 4648 Base32, decode only (no encoder needed - nshbox only ever
+ * consumes a secret, never produces one). Case-insensitive and tolerant
+ * of a missing '=' padding tail, since that is how TOTP secrets are
+ * normally handed out (Google Authenticator, most "add account" QR
+ * payloads, and this project's own examples all give the bare unpadded
+ * string) - the RFC itself requires padding, real-world secrets mostly
+ * don't have it. Also tolerant of whitespace (space, tab, CR, LF) anywhere
+ * in the input, silently skipped - a secret manually copied out of a setup
+ * screen is often grouped like "JBSW Y3DP EHPK 3PXP", and rejecting that
+ * outright would be a needless paper cut when skipping it costs nothing
+ * and cannot itself turn a wrong secret into a right one (the alphabet
+ * check below still rejects every other kind of invalid character exactly
+ * as before). A bit accumulator handles a short final group without
+ * needing an exact multiple-of-8 input length. Rejects any character
+ * outside the 32-symbol alphabet (with or without padding, whitespace
+ * aside). out_cap must be at least strlen(in) * 5 / 8 bytes; *out_len is
+ * the real decoded length. Returns 0 on success, -1 on a malformed
+ * secret. */
+static int base32_decode(const char *in, unsigned char *out, size_t out_cap, size_t *out_len)
+{
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    unsigned char rev[256];
+    size_t n = 0;
+    unsigned bits = 0;
+    unsigned long value = 0;
+    const char *p;
+    int i;
+
+    memset(rev, 0xff, sizeof(rev));
+
+    for (i = 0; i < 32; i++)
+        rev[(unsigned char)alphabet[i]] = (unsigned char)i;
+
+    for (p = in; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        unsigned char v;
+
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+            continue;
+
+        if (c == '=')
+            break;   /* padding: only ever trails real data, never mixed in */
+
+        if (c >= 'a' && c <= 'z')
+            c = (unsigned char)(c - 'a' + 'A');
+
+        v = rev[c];
+
+        if (v == 0xff)
+            return -1;
+
+        value = (value << 5) | v;
+        bits += 5;
+
+        if (bits >= 8) {
+            if (n >= out_cap)
+                return -1;
+
+            out[n++] = (unsigned char)((value >> (bits - 8)) & 0xff);
+            bits -= 8;
+        }
+    }
+
+    /* Whatever is left (0-4 leftover bits) must be zero padding, not
+     * stray data - a real encoder never emits anything else there. */
+    if (bits > 0 && (value & ((1UL << bits) - 1)) != 0)
+        return -1;
+
+    if (n == 0)
+        return -1;
+
+    *out_len = n;
+    return 0;
+}
+
+/* HMAC block sizes (RFC 2104): 64 bytes for MD5/SHA-1/SHA-256, 128 for
+ * SHA-384/SHA-512. */
+static unsigned int hash_block_size(hash_algo_t algo)
+{
+    switch (algo) {
+    case HASH_MD5:
+    case HASH_SHA1:
+    case HASH_SHA256:
+        return 64;
+    case HASH_SHA384:
+    case HASH_SHA512:
+        return 128;
+    }
+
+    return 64;
+}
+
+/* Plain HMAC (RFC 2104) built on the existing low-level hash_ctx_t
+ * primitives above, not mbedTLS's generic mbedtls_md.h layer - same
+ * reasoning as the checksum commands (see this file's own top comment):
+ * the generic layer registers every enabled digest and links in far more
+ * of the library than a fixed, known algorithm needs. out must hold
+ * HASH_MAX_DIGEST bytes. Returns 0 on success, -1 on an mbedTLS error. */
+static int hmac_compute(hash_algo_t algo, const unsigned char *key, size_t key_len,
+                         const unsigned char *msg, size_t msg_len,
+                         unsigned char *out, unsigned int *out_len)
+{
+    unsigned int block = hash_block_size(algo);
+    unsigned int digest_len = hash_digest_len(algo);
+    unsigned char key_block[128];   /* == the larger of the two block sizes above */
+    unsigned char ipad[128];
+    unsigned char opad[128];
+    unsigned char inner_digest[HASH_MAX_DIGEST];
+    hash_ctx_t ctx;
+    unsigned int i;
+    int rc = -1;
+
+    memset(key_block, 0, sizeof(key_block));
+
+    if (key_len > block) {
+        /* Longer than one block: hash it down first, same as any HMAC. */
+        if (hash_start(&ctx, algo) != 0)
+            return -1;
+
+        if (hash_update(&ctx, key, key_len) != 0 || hash_finish(&ctx, key_block) != 0) {
+            hash_free(&ctx);
+            return -1;
+        }
+
+        hash_free(&ctx);
+    } else {
+        memcpy(key_block, key, key_len);
+    }
+
+    for (i = 0; i < block; i++) {
+        ipad[i] = (unsigned char)(key_block[i] ^ 0x36);
+        opad[i] = (unsigned char)(key_block[i] ^ 0x5c);
+    }
+
+    /* Zero the key material once it is folded into ipad/opad - it does
+     * not need to sit around in key_block any longer than that. */
+    memset(key_block, 0, sizeof(key_block));
+
+    if (hash_start(&ctx, algo) != 0)
+        goto out;
+
+    if (hash_update(&ctx, ipad, block) != 0 ||
+            hash_update(&ctx, msg, msg_len) != 0 ||
+            hash_finish(&ctx, inner_digest) != 0) {
+        hash_free(&ctx);
+        goto out;
+    }
+
+    hash_free(&ctx);
+
+    if (hash_start(&ctx, algo) != 0)
+        goto out;
+
+    if (hash_update(&ctx, opad, block) != 0 ||
+            hash_update(&ctx, inner_digest, digest_len) != 0 ||
+            hash_finish(&ctx, out) != 0) {
+        hash_free(&ctx);
+        goto out;
+    }
+
+    hash_free(&ctx);
+    *out_len = digest_len;
+    rc = 0;
+
+out:
+    memset(ipad, 0, sizeof(ipad));
+    memset(opad, 0, sizeof(opad));
+    memset(inner_digest, 0, sizeof(inner_digest));
+    return rc;
+}
+
+typedef enum {
+    TOTP_SHA1,
+    TOTP_SHA256,
+    TOTP_SHA512
+} totp_algo_t;
+
+/* RFC 4226 HOTP: HMAC over an 8-byte big-endian counter, then the dynamic
+ * truncation from RFC 4226 section 5.3. digits is capped at 6-8 - every
+ * real-world TOTP secret (Google Authenticator and everything compatible
+ * with it, and both digit counts RFC 6238's own test vectors use) falls
+ * in that range, and it keeps the "% 10^digits" arithmetic below well
+ * inside uint32_t regardless of digits. code_out is always < 10^digits. */
+static int hotp_generate(const unsigned char *key, size_t key_len, uint64_t counter,
+                          unsigned digits, totp_algo_t algo, uint32_t *code_out)
+{
+    unsigned char msg[8];
+    unsigned char digest[HASH_MAX_DIGEST];
+    unsigned int digest_len;
+    hash_algo_t halgo;
+    unsigned int offset;
+    uint32_t bin_code;
+    uint32_t modulus;
+    int i;
+
+    if (digits < 6 || digits > 8)
+        return -1;
+
+    switch (algo) {
+    case TOTP_SHA1:   halgo = HASH_SHA1;   break;
+    case TOTP_SHA256: halgo = HASH_SHA256; break;
+    case TOTP_SHA512: halgo = HASH_SHA512; break;
+    default:          return -1;
+    }
+
+    for (i = 7; i >= 0; i--) {
+        msg[i] = (unsigned char)(counter & 0xff);
+        counter >>= 8;
+    }
+
+    if (hmac_compute(halgo, key, key_len, msg, sizeof(msg), digest, &digest_len) != 0)
+        return -1;
+
+    /* digest_len is 20/32/64 for SHA-1/256/512, always >= 20, so offset
+     * (0-15) + 4 bytes (offset+3 <= 18) never runs past the end of digest[]
+     * even for the shortest of the three (SHA-1, 20 bytes). */
+    offset = digest[digest_len - 1] & 0x0f;
+
+    bin_code = ((uint32_t)(digest[offset]     & 0x7f) << 24) |
+               ((uint32_t)(digest[offset + 1] & 0xff) << 16) |
+               ((uint32_t)(digest[offset + 2] & 0xff) << 8)  |
+               ((uint32_t)(digest[offset + 3] & 0xff));
+
+    memset(digest, 0, sizeof(digest));
+
+    modulus = 1;
+
+    for (i = 0; i < (int)digits; i++)
+        modulus *= 10;
+
+    *code_out = bin_code % modulus;
+    return 0;
+}
+
+/* RFC 6238 TOTP: HOTP with counter = floor(timestamp / period). */
+static int totp_generate(const unsigned char *key, size_t key_len, uint64_t timestamp,
+                          unsigned period, unsigned digits, totp_algo_t algo, uint32_t *code_out)
+{
+    if (period == 0)
+        return -1;
+
+    return hotp_generate(key, key_len, timestamp / period, digits, algo, code_out);
+}
+
+typedef enum {
+    TOTP_ENCODING_BASE32,   /* --secret is Base32 (RFC 4648) - the default */
+    TOTP_ENCODING_TEXT      /* --secret is used exactly as given, as raw key bytes */
+} totp_encoding_t;
+
+static int totp_encoding_from_name(const char *name, totp_encoding_t *out)
+{
+    if (!strcasecmp(name, "base32")) {
+        *out = TOTP_ENCODING_BASE32;
+    } else if (!strcasecmp(name, "text")) {
+        *out = TOTP_ENCODING_TEXT;
+    } else {
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Turns a --secret/"secret" string plus its encoding into the raw HMAC key
+ * bytes, one shared place for both cmd_totp()'s flag-based mode and its
+ * --file/JSON mode below to agree on. Base32 goes through base32_decode()
+ * as always; "text" is used exactly as given - RFC 6238's own Appendix B
+ * test vectors are themselves raw ASCII text, not Base32 ("1234567890..."),
+ * so this is not an unusual thing for a TOTP secret to be, just a second,
+ * simpler encoding alongside the default one. Returns 0 on success, -1 if
+ * the secret does not fit in key_cap (text) or is not valid Base32 (base32) -
+ * either way, without ever printing the secret itself anywhere, the same
+ * rule base32_decode()'s own callers already follow. */
+static int totp_decode_secret(const char *secret, totp_encoding_t encoding,
+                               unsigned char *key, size_t key_cap, size_t *key_len)
+{
+    if (encoding == TOTP_ENCODING_TEXT) {
+        size_t n = strlen(secret);
+
+        if (n == 0 || n >= key_cap)
+            return -1;
+
+        memcpy(key, secret, n);
+        *key_len = n;
+        return 0;
+    }
+
+    return base32_decode(secret, key, key_cap, key_len);
+}
+
+/* Rejects a system clock that has obviously not been set yet (still near
+ * the epoch) - the TC002 may run nshbox before NTP has synced. Only ever
+ * applied to time(NULL); an explicitly given --time/"time" is trusted as
+ * given, since RFC 6238's own test vectors use timestamps as small as 59
+ * on purpose (see cmd_totp()). 1577836800 = 2020-01-01 00:00:00 UTC - not
+ * a real deadline, just "clearly not an unset clock". */
+#define TOTP_MIN_SANE_TIME 1577836800LL
+
+typedef enum {
+    TOTP_RUN_OK,
+    TOTP_RUN_BAD_SECRET,
+    TOTP_RUN_CLOCK_NOT_SET,
+    TOTP_RUN_INTERNAL_ERROR
+} totp_run_result_t;
+
+/* Decode -> (sanity-checked) time -> generate, in one place shared by
+ * cmd_totp()'s flag-based mode and its --file/JSON mode below (and, later,
+ * "nshbox serve"'s POST /totp) - so all three ways of asking for a code go
+ * through exactly the same logic, not three copies that could quietly
+ * drift apart. Returns a reason rather than a ready-made message, on
+ * purpose: a human running the flag-based CLI gets a detailed stderr
+ * message (with the actual clock reading, say), while --file/JSON mode
+ * turns the same reason into one of its own fixed, static JSON error
+ * strings (see totp_parse_request_json()'s own top comment for why those
+ * particular messages stay fixed literals) - two different audiences for
+ * the same underlying failure, not two different implementations of it.
+ * clock_now_out may be NULL if the caller does not want the actual clock
+ * reading for TOTP_RUN_CLOCK_NOT_SET. */
+static totp_run_result_t totp_run(const char *secret, totp_encoding_t encoding, totp_algo_t algo,
+                                   unsigned digits, unsigned period, long long time_arg, int have_time_arg,
+                                   uint32_t *code_out, long long *time_used_out, time_t *clock_now_out)
+{
+    unsigned char key[256];
+    size_t key_len;
+    int rc;
+
+    if (totp_decode_secret(secret, encoding, key, sizeof(key), &key_len) != 0)
+        return TOTP_RUN_BAD_SECRET;
+
+    if (!have_time_arg) {
+        time_t now = time(NULL);
+
+        if (now < (time_t)TOTP_MIN_SANE_TIME) {
+            memset(key, 0, sizeof(key));
+
+            if (clock_now_out)
+                *clock_now_out = now;
+
+            return TOTP_RUN_CLOCK_NOT_SET;
+        }
+
+        time_arg = (long long)now;
+    }
+
+    rc = totp_generate(key, key_len, (uint64_t)time_arg, period, digits, algo, code_out);
+    memset(key, 0, sizeof(key));
+
+    if (rc != 0)
+        return TOTP_RUN_INTERNAL_ERROR;
+
+    *time_used_out = time_arg;
+    return TOTP_RUN_OK;
+}
+
+static int totp_algo_from_name(const char *name, totp_algo_t *out)
+{
+    if (!strcasecmp(name, "sha1")) {
+        *out = TOTP_SHA1;
+    } else if (!strcasecmp(name, "sha256")) {
+        *out = TOTP_SHA256;
+    } else if (!strcasecmp(name, "sha512")) {
+        *out = TOTP_SHA512;
+    } else {
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Shared size limits - used by both the otpauth URI parser right below
+ * and the JSON request/response layer further down (see each one's own
+ * secret/request/response buffers), so defined once, here, before either
+ * needs them. */
+#define TOTP_JSON_MAX_REQUEST   4096   /* generous for a handful of small fields */
+#define TOTP_JSON_MAX_SECRET     512   /* generous for any real Base32 secret */
+#define TOTP_JSON_MAX_RESPONSE   256   /* every response body here is tiny */
+
+/* ------------------------------------------------------------------ */
+/* totp otpauth:// URI - a third way (alongside --secret and --file)   */
+/* to give totp its secret, the same URI shape a phone authenticator   */
+/* app's "add account" QR code or setup link already uses:             */
+/*   otpauth://totp/<label>?secret=...&issuer=...&algorithm=...&       */
+/*                          digits=...&period=...                      */
+/* Never formally an RFC itself, but a de facto standard RFC 6238's     */
+/* own ecosystem settled on. ------------------------------------------ */
+
+static int hex_digit_value(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+
+    return -1;
+}
+
+/* Decodes URI percent-encoding (%XX) from in (in_len bytes, need not be
+ * NUL-terminated - a query-string value is a slice of a larger string,
+ * not its own allocation) into out. Deliberately does NOT treat a literal
+ * '+' as a space: that is an HTML form-encoding convention
+ * (application/x-www-form-urlencoded), not a URI one - RFC 3986 gives '+'
+ * no special meaning at all, so a literal '+' in a label or issuer name
+ * passes through unchanged. Returns 0 on success (out is NUL-terminated),
+ * -1 on a malformed %XX escape or if the result would not fit in
+ * out_cap. */
+static int uri_percent_decode(const char *in, size_t in_len, char *out, size_t out_cap)
+{
+    size_t i = 0;
+    size_t n = 0;
+
+    while (i < in_len) {
+        unsigned char c = (unsigned char)in[i];
+
+        if (n + 1 >= out_cap)
+            return -1;
+
+        if (c == '%') {
+            int hi, lo;
+
+            if (i + 2 >= in_len)
+                return -1;
+
+            hi = hex_digit_value(in[i + 1]);
+            lo = hex_digit_value(in[i + 2]);
+
+            if (hi < 0 || lo < 0)
+                return -1;
+
+            out[n++] = (char)((hi << 4) | lo);
+            i += 3;
+        } else {
+            out[n++] = (char)c;
+            i++;
+        }
+    }
+
+    out[n] = '\0';
+    return 0;
+}
+
+/* Parsed otpauth URI - just what actually feeds the TOTP calculation.
+ * "label" and "issuer" are deliberately not extracted at all: RFC 6238's
+ * own ecosystem defines them as purely informational (they never affect
+ * the calculation), and nothing here has anywhere to show them - the
+ * label is skipped over structurally (to find where the query string
+ * starts), not parsed into a field that would otherwise go unused. */
+typedef struct {
+    char secret[TOTP_JSON_MAX_SECRET];   /* raw Base32 string, not yet decoded */
+    totp_algo_t algorithm;
+    unsigned digits;
+    unsigned period;
+} totp_otpauth_t;
+
+/* Parses an otpauth://totp/... URI. Only ever hands back a fixed, static
+ * *error string on failure (see totp_parse_request_json()'s own top
+ * comment for why - the same rule: a caller-supplied value, here the
+ * whole URI, must never appear in any error message). The secret is
+ * handed back as its raw Base32 text, not yet decoded or even checked
+ * for valid Base32 syntax - totp_decode_secret() (the same one every
+ * other input path already uses) is what actually validates and decodes
+ * it, not duplicated here. Returns 0 on success, -1 with *error set on
+ * any parse or validation failure. */
+static int totp_parse_otpauth_uri(const char *uri, totp_otpauth_t *out, const char **error)
+{
+    static const char prefix_totp[] = "otpauth://totp/";
+    static const char prefix_any[] = "otpauth://";
+    const char *q;
+    const char *p;
+    int have_secret = 0;
+
+    out->secret[0] = '\0';
+    out->algorithm = TOTP_SHA1;   /* otpauth's own default (RFC 6238's ecosystem,
+                                    * NOT this project's own --secret default of
+                                    * SHA256 - see nshbox/README.md's "totp" section) */
+    out->digits = 6;
+    out->period = 30;
+
+    if (strncmp(uri, prefix_totp, strlen(prefix_totp)) != 0) {
+        if (strncmp(uri, prefix_any, strlen(prefix_any)) == 0)
+            *error = "otpauth URI type must be totp (hotp is not supported)";
+        else
+            *error = "malformed otpauth URI";
+
+        return -1;
+    }
+
+    /* Skip the label entirely (see this struct's own top comment) - just
+     * find where the query string starts. */
+    q = strchr(uri + strlen(prefix_totp), '?');
+
+    if (!q) {
+        *error = "otpauth URI has no parameters";
+        return -1;
+    }
+
+    for (p = q + 1; *p; ) {
+        const char *key_start = p;
+        const char *eq = strchr(p, '=');
+        const char *amp;
+        const char *value_start;
+        size_t key_len;
+        size_t value_len;
+        char key[16];
+
+        if (!eq) {
+            *error = "malformed otpauth URI";
+            return -1;
+        }
+
+        key_len = (size_t)(eq - key_start);
+
+        if (key_len == 0 || key_len >= sizeof(key)) {
+            *error = "malformed otpauth URI";
+            return -1;
+        }
+
+        memcpy(key, key_start, key_len);
+        key[key_len] = '\0';
+
+        value_start = eq + 1;
+        amp = strchr(value_start, '&');
+        value_len = amp ? (size_t)(amp - value_start) : strlen(value_start);
+
+        if (!strcmp(key, "secret")) {
+            if (uri_percent_decode(value_start, value_len, out->secret, sizeof(out->secret)) != 0) {
+                *error = "malformed otpauth URI";
+                return -1;
+            }
+
+            have_secret = 1;
+        } else if (!strcmp(key, "algorithm")) {
+            char algo_name[16];
+
+            if (uri_percent_decode(value_start, value_len, algo_name, sizeof(algo_name)) != 0 ||
+                    totp_algo_from_name(algo_name, &out->algorithm) != 0) {
+                *error = "invalid algorithm in otpauth URI";
+                return -1;
+            }
+        } else if (!strcmp(key, "digits")) {
+            char digits_str[8];
+            char *end;
+            long v;
+
+            if (uri_percent_decode(value_start, value_len, digits_str, sizeof(digits_str)) != 0) {
+                *error = "malformed otpauth URI";
+                return -1;
+            }
+
+            errno = 0;
+            v = strtol(digits_str, &end, 10);
+
+            if (errno || *end || v < 6 || v > 8) {
+                *error = "invalid digits in otpauth URI";
+                return -1;
+            }
+
+            out->digits = (unsigned)v;
+        } else if (!strcmp(key, "period")) {
+            char period_str[16];
+            char *end;
+            long v;
+
+            if (uri_percent_decode(value_start, value_len, period_str, sizeof(period_str)) != 0) {
+                *error = "malformed otpauth URI";
+                return -1;
+            }
+
+            errno = 0;
+            v = strtol(period_str, &end, 10);
+
+            if (errno || *end || v <= 0) {
+                *error = "invalid period in otpauth URI";
+                return -1;
+            }
+
+            out->period = (unsigned)v;
+        }
+        /* Any other key (issuer, label, unknown) is ignored - not an
+         * error, same tolerant-of-unknown-fields convention
+         * totp_parse_request_json() below already follows. */
+
+        p = amp ? amp + 1 : value_start + value_len;
+    }
+
+    if (!have_secret) {
+        *error = "otpauth URI has no secret parameter";
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Runs a code from an already-parsed otpauth URI, applying the CLI-flag
+ * override precedence: explicit --algorithm/--digits/--period beat the
+ * URI's own values; --time is never taken from a URI at all (only ever
+ * an explicit --time, or the sanity-checked system clock) - see
+ * nshbox/README.md's "totp" section for this rule and why. Shared by
+ * --url and --file's otpauth:// sub-case (see totp_file_is_json()) so
+ * the two do not drift apart. Never echoes the URI or the secret it
+ * came from - only ever a fixed message. Prints the bare code on
+ * success and returns 0, or prints an error to stderr and returns 1. */
+static int totp_run_otpauth(const totp_otpauth_t *otp,
+                             int have_algorithm_arg, totp_algo_t algo_arg,
+                             int have_digits_arg, long digits_arg,
+                             int have_period_arg, long period_arg,
+                             long long time_arg, int have_time_arg)
+{
+    totp_algo_t algo = have_algorithm_arg ? algo_arg : otp->algorithm;
+    unsigned digits = have_digits_arg ? (unsigned)digits_arg : otp->digits;
+    unsigned period = have_period_arg ? (unsigned)period_arg : otp->period;
+    totp_run_result_t run_rc;
+    uint32_t code;
+    long long time_used;
+    time_t clock_now = 0;
+    char code_str[16];
+
+    /* The secret parameter in an otpauth URI is always Base32 - never
+     * affected by --text, which only ever modifies --secret. */
+    run_rc = totp_run(otp->secret, TOTP_ENCODING_BASE32, algo, digits, period,
+                       time_arg, have_time_arg, &code, &time_used, &clock_now);
+
+    if (run_rc == TOTP_RUN_BAD_SECRET) {
+        fprintf(stderr, "totp: invalid secret in otpauth URI (not valid Base32)\n");
+        return 1;
+    }
+
+    if (run_rc == TOTP_RUN_CLOCK_NOT_SET) {
+        fprintf(stderr, "totp: system clock is not set yet (reads %lld, before 2020) - "
+                         "pass --time explicitly, or wait for it to sync\n", (long long)clock_now);
+        return 1;
+    }
+
+    if (run_rc != TOTP_RUN_OK) {
+        fprintf(stderr, "totp: could not compute a code\n");
+        return 1;
+    }
+
+    snprintf(code_str, sizeof(code_str), "%0*u", (int)digits, code);
+    printf("%s\n", code_str);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* totp request/response JSON - shared by "nshbox totp --file" and the */
+/* future "nshbox serve" HTTP API's POST /totp, so there is exactly    */
+/* one implementation of this request shape, not a CLI one and an HTTP */
+/* one that could quietly drift apart. Kept intentionally small and    */
+/* NOT a general JSON parser (see nshbox/README.md's "totp" section -  */
+/* the request is always this one flat, known object) - see            */
+/* json_pretty_print() elsewhere in this file for that different job.  */
+/* ------------------------------------------------------------------ */
+
+/* Request:  {"secret":"<value>", "encoding":"base32|text",
+ *            "algorithm":"sha1|sha256|sha512",
+ *            "digits":6|7|8, "period":<seconds>, "time":<unix>}
+ *   - only "secret" is required; everything else defaults the same way
+ *     the CLI flags do (see cmd_totp()), including "encoding" (base32).
+ * Response: {"code":"<digits>","period":<seconds>,"remaining":<seconds>,"time":<unix>}
+ *   - "code" is a JSON STRING deliberately, so a leading zero survives.
+ * Error:    {"error":"<fixed, static message>"}
+ *   - the message is always one nshbox itself chose, NEVER anything
+ *     copied from the request (so it can never echo the secret or any
+ *     other caller-supplied text - no string-escaping is needed
+ *     anywhere in this response layer as a direct result of that: every
+ *     string a response ever contains is either this fixed literal
+ *     text, or "code", which is always all-digits (see hotp_generate()'s
+ *     own %0*u formatting) - never arbitrary data). */
+
+/* Parsed request, filled in with the same defaults cmd_totp()'s flag
+ * parsing uses, before totp_parse_request_json() below overrides whichever
+ * fields the JSON object actually supplies. "secret" is stored exactly as
+ * given, un-decoded - encoding says how to turn it into real key bytes
+ * (totp_decode_secret() above), the same way --secret/--encoding do for
+ * the CLI's own flag-based mode. */
+typedef struct {
+    char secret[TOTP_JSON_MAX_SECRET];
+    totp_encoding_t encoding;
+    totp_algo_t algorithm;
+    unsigned digits;
+    unsigned period;
+    long long time_value;
+    int have_time;   /* 1 if "time" was present in the request */
+
+    /* "token" is meaningful only when this JSON is loaded as a "nshbox
+     * serve --secret NAME=PATH" secret-config file (see serve_load_
+     * secret_file() in this file's own "serve" section below), never as
+     * an actual totp calculation request - a real request has no use for
+     * it, and simply leaves it unset. Parsed here anyway (rather than by
+     * a second, separate parser) so a secret-config file gets this
+     * object's existing structural JSON validation for free, the same
+     * way every other field already does. */
+    char token[TOTP_JSON_MAX_SECRET];
+    int have_token;
+} totp_request_t;
+
+/* --- Small, reusable JSON primitives - deliberately not a general ---
+ * --- parser: just what a flat object of strings/unsigned integers ---
+ * --- needs (see this section's own top comment for why).          --- */
+
+static void json_skip_ws(const char **p)
+{
+    while (**p == ' ' || **p == '\t' || **p == '\n' || **p == '\r')
+        (*p)++;
+}
+
+/* Expects *p to point at ch; advances past it and returns 0, or leaves
+ * *p unchanged and returns -1 if it does not match. */
+static int json_expect_char(const char **p, char ch)
+{
+    if (**p != ch)
+        return -1;
+
+    (*p)++;
+    return 0;
+}
+
+/* Reads a JSON string value (the opening '"' must already be consumed by
+ * the caller via json_expect_char). Deliberately does NOT decode
+ * backslash escapes (\", \\, \n, \uXXXX, ...) - every string this
+ * request shape actually needs (a Base32 secret, an algorithm name) can
+ * never legally contain a character that would need escaping in the
+ * first place (Base32's whole alphabet is A-Z2-7; the algorithm names
+ * are plain ASCII words), so a backslash or a raw control byte appearing
+ * here is already a malformed request for THIS shape specifically,
+ * rejected the same as any other parse error rather than silently
+ * decoded. Returns 0 and advances *p past the closing '"' on success
+ * (out is NUL-terminated), -1 on anything else (unterminated string,
+ * escape/control byte seen, or the value would not fit in out_cap). */
+static int json_parse_plain_string(const char **p, char *out, size_t out_cap)
+{
+    size_t n = 0;
+
+    while (**p != '"') {
+        unsigned char c = (unsigned char)**p;
+
+        if (c == '\0' || c == '\\' || c < 0x20)
+            return -1;
+
+        if (n + 1 >= out_cap)
+            return -1;
+
+        out[n++] = (char)c;
+        (*p)++;
+    }
+
+    out[n] = '\0';
+    (*p)++;   /* the closing '"' */
+    return 0;
+}
+
+/* Reads a JSON number that is a plain, non-negative integer (no sign, no
+ * fraction, no exponent - every number this request shape needs is a
+ * count of digits, seconds, or a Unix timestamp, never any of those).
+ * Returns 0 and advances *p past the digits on success, -1 if the next
+ * character is not a digit at all, or the value would overflow. */
+static int json_parse_uint(const char **p, unsigned long long *out)
+{
+    unsigned long long v = 0;
+    int any = 0;
+
+    while (**p >= '0' && **p <= '9') {
+        unsigned digit = (unsigned)(**p - '0');
+
+        if (v > (ULLONG_MAX - digit) / 10)
+            return -1;   /* would overflow */
+
+        v = v * 10 + digit;
+        any = 1;
+        (*p)++;
+    }
+
+    if (!any)
+        return -1;
+
+    *out = v;
+    return 0;
+}
+
+/* Parses the totp request object from a NUL-terminated buffer (json must
+ * already be NUL-terminated by the caller - both cmd_totp()'s file
+ * reader and the future HTTP body reader make sure of that). req is
+ * filled in with the CLI's own defaults first (SHA256, 6 digits, 30
+ * second period, no explicit time), then whichever fields the object
+ * actually supplies override those - same defaulting cmd_totp()'s own
+ * flag parsing uses, so a request that only gives "secret" behaves
+ * identically through either input path. Unknown keys are ignored (a
+ * normal, tolerant REST convention), not rejected. Returns 0 on success,
+ * or -1 with *error set to a fixed, static message (see this section's
+ * own top comment for why every error is a fixed string, never anything
+ * copied from the input) on any parse or validation failure. */
+static int totp_parse_request_json(const char *json, totp_request_t *req, const char **error)
+{
+    const char *p = json;
+    int have_secret = 0;
+
+    req->secret[0] = '\0';
+    req->encoding = TOTP_ENCODING_BASE32;
+    req->algorithm = TOTP_SHA256;
+    req->digits = 6;
+    req->period = 30;
+    req->time_value = 0;
+    req->have_time = 0;
+    req->token[0] = '\0';
+    req->have_token = 0;
+
+    json_skip_ws(&p);
+
+    if (json_expect_char(&p, '{') != 0) {
+        *error = "malformed JSON";
+        return -1;
+    }
+
+    json_skip_ws(&p);
+
+    if (*p == '}') {
+        p++;
+    } else {
+        for (;;) {
+            char key[32];
+
+            json_skip_ws(&p);
+
+            if (json_expect_char(&p, '"') != 0 ||
+                    json_parse_plain_string(&p, key, sizeof(key)) != 0) {
+                *error = "malformed JSON";
+                return -1;
+            }
+
+            json_skip_ws(&p);
+
+            if (json_expect_char(&p, ':') != 0) {
+                *error = "malformed JSON";
+                return -1;
+            }
+
+            json_skip_ws(&p);
+
+            if (!strcmp(key, "secret")) {
+                if (json_expect_char(&p, '"') != 0 ||
+                        json_parse_plain_string(&p, req->secret, sizeof(req->secret)) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+
+                have_secret = 1;
+            } else if (!strcmp(key, "encoding")) {
+                char encoding_name[16];
+
+                if (json_expect_char(&p, '"') != 0 ||
+                        json_parse_plain_string(&p, encoding_name, sizeof(encoding_name)) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+
+                if (totp_encoding_from_name(encoding_name, &req->encoding) != 0) {
+                    *error = "invalid encoding";
+                    return -1;
+                }
+            } else if (!strcmp(key, "algorithm")) {
+                char algo_name[16];
+
+                if (json_expect_char(&p, '"') != 0 ||
+                        json_parse_plain_string(&p, algo_name, sizeof(algo_name)) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+
+                if (totp_algo_from_name(algo_name, &req->algorithm) != 0) {
+                    *error = "invalid algorithm";
+                    return -1;
+                }
+            } else if (!strcmp(key, "digits")) {
+                unsigned long long v;
+
+                if (json_parse_uint(&p, &v) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+
+                if (v < 6 || v > 8) {
+                    *error = "invalid digits";
+                    return -1;
+                }
+
+                req->digits = (unsigned)v;
+            } else if (!strcmp(key, "period")) {
+                unsigned long long v;
+
+                if (json_parse_uint(&p, &v) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+
+                if (v == 0 || v > UINT_MAX) {
+                    *error = "invalid period";
+                    return -1;
+                }
+
+                req->period = (unsigned)v;
+            } else if (!strcmp(key, "time")) {
+                unsigned long long v;
+
+                if (json_parse_uint(&p, &v) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+
+                if (v > (unsigned long long)LLONG_MAX) {
+                    *error = "invalid time";
+                    return -1;
+                }
+
+                req->time_value = (long long)v;
+                req->have_time = 1;
+            } else if (!strcmp(key, "token")) {
+                if (json_expect_char(&p, '"') != 0 ||
+                        json_parse_plain_string(&p, req->token, sizeof(req->token)) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+
+                req->have_token = 1;
+            } else {
+                /* Unknown key - skip its value without acting on it.
+                 * Only a plain string or a plain non-negative integer is
+                 * understood (the only two value shapes this request
+                 * ever needs); anything else is malformed, same as an
+                 * unparseable known field. */
+                char discard_str[TOTP_JSON_MAX_SECRET];
+                unsigned long long discard_num;
+
+                if (*p == '"') {
+                    p++;
+
+                    if (json_parse_plain_string(&p, discard_str, sizeof(discard_str)) != 0) {
+                        *error = "malformed JSON";
+                        return -1;
+                    }
+                } else if (json_parse_uint(&p, &discard_num) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+            }
+
+            json_skip_ws(&p);
+
+            if (*p == ',') {
+                p++;
+                continue;
+            }
+
+            if (json_expect_char(&p, '}') == 0)
+                break;
+
+            *error = "malformed JSON";
+            return -1;
+        }
+    }
+
+    if (!have_secret) {
+        *error = "missing secret";
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Builds the totp response body ({"code":...,"period":...,"remaining":...,
+ * "time":...}) into out (a plain snprintf - no string escaping needed,
+ * see this section's own top comment for why: code is always all-digits,
+ * nothing else here is a string at all). Returns the number of bytes
+ * written (not counting the NUL), or -1 if it would not fit in out_cap
+ * (should not happen at TOTP_JSON_MAX_RESPONSE for any digits/period/time
+ * this code ever produces, but never trusted blindly). */
+static int totp_build_response_json(char *out, size_t out_cap, const char *code,
+                                     unsigned period, long long time_value)
+{
+    long long remaining = (long long)period - (time_value % (long long)period);
+    int n;
+
+    /* time_value % period is always in [0, period), by C's own integer
+     * modulo rules for two non-negative operands (both are: period > 0
+     * is enforced by every caller, time_value >= 0 is enforced by
+     * cmd_totp() and by totp_parse_request_json() above) - so remaining
+     * above is always in (0, period], never 0 or negative; kept as an
+     * explicit, named comment rather than trusted silently, since an
+     * off-by-one here would be exactly the kind of boundary bug this
+     * project's own review process looks for. */
+    n = snprintf(out, out_cap,
+        "{\"code\":\"%s\",\"period\":%u,\"remaining\":%lld,\"time\":%lld}",
+        code, period, remaining, time_value);
+
+    if (n < 0 || (size_t)n >= out_cap)
+        return -1;
+
+    return n;
+}
+
+/* Builds an error response body ({"error":"<msg>"}) into out. msg must
+ * always be one of the fixed, static strings this file itself produces
+ * (see totp_parse_request_json()'s own *error outputs) - never anything
+ * derived from the request, so, again, no escaping is needed. */
+static int totp_build_error_json(char *out, size_t out_cap, const char *msg)
+{
+    int n = snprintf(out, out_cap, "{\"error\":\"%s\"}", msg);
+
+    if (n < 0 || (size_t)n >= out_cap)
+        return -1;
+
+    return n;
+}
+
+/* Result of parsing+running a totp JSON request, in a format-neutral shape -
+ * shared by totp_handle_json_request() below (which wraps it as JSON, for
+ * "nshbox totp --file" and, when Accept asks for JSON, "nshbox serve"'s
+ * POST /totp) and by serve_dispatch()'s own plain-text default for POST
+ * /totp (see this file's "serve" section) - one implementation of "parse,
+ * decode, generate", not two copies that could quietly drift apart. error
+ * is only meaningful when ok is 0, and is always one of this file's own
+ * fixed, static literals (see totp_parse_request_json()'s own *error
+ * outputs and the switch below) - never anything derived from the request,
+ * so callers may print it directly with no escaping. */
+typedef struct {
+    int ok;
+    char code[16];
+    unsigned period;
+    long long time_value;
+    const char *error;
+} totp_result_t;
+
+/* Turns a totp_run() failure into one of this file's own fixed, static
+ * error strings - shared by totp_process_json_request() below and by
+ * serve_run_named_secret() (this file's own "serve" section) so the two
+ * ways POST /totp can end up calling totp_run() cannot report the same
+ * failure with two different messages. */
+static const char *totp_run_error_message(totp_run_result_t rc, totp_encoding_t encoding)
+{
+    switch (rc) {
+        case TOTP_RUN_BAD_SECRET:
+            return (encoding == TOTP_ENCODING_TEXT) ? "invalid secret" : "invalid Base32 secret";
+        case TOTP_RUN_CLOCK_NOT_SET:
+            return "system clock is not set yet";
+        default:
+            return "could not compute a code";
+    }
+}
+
+static void totp_process_json_request(const char *request_json, totp_result_t *out)
+{
+    totp_request_t req;
+    const char *parse_error;
+    totp_run_result_t run_rc;
+    uint32_t code;
+    long long time_used;
+
+    out->ok = 0;
+    out->error = NULL;
+
+    if (totp_parse_request_json(request_json, &req, &parse_error) != 0) {
+        out->error = parse_error;
+        return;
+    }
+
+    run_rc = totp_run(req.secret, req.encoding, req.algorithm, req.digits, req.period,
+                       req.time_value, req.have_time, &code, &time_used, NULL);
+
+    if (run_rc != TOTP_RUN_OK) {
+        out->error = totp_run_error_message(run_rc, req.encoding);
+        return;
+    }
+
+    snprintf(out->code, sizeof(out->code), "%0*u", (int)req.digits, code);
+    out->period = req.period;
+    out->time_value = time_used;
+    out->ok = 1;
+}
+
+/* Parses a totp JSON request body, runs it, and builds either the success
+ * response or an error response into out_response (always exactly one
+ * JSON document, out_response_cap bytes) - a thin JSON wrapper around
+ * totp_process_json_request() above. Used by "nshbox totp --file" (a
+ * *.json file, below) and by "nshbox serve"'s POST /totp handler when its
+ * caller asked for JSON (see serve_dispatch()). Returns 1 if out_response
+ * holds the success body, 0 if it holds an error body - this function does
+ * not know or care whether its caller is a CLI exit code or an HTTP
+ * status, only which of the two shapes to hand back. */
+static int totp_handle_json_request(const char *request_json, char *out_response, size_t out_response_cap)
+{
+    totp_result_t result;
+
+    totp_process_json_request(request_json, &result);
+
+    if (!result.ok) {
+        totp_build_error_json(out_response, out_response_cap, result.error);
+        return 0;
+    }
+
+    totp_build_response_json(out_response, out_response_cap, result.code, result.period, result.time_value);
+    return 1;
+}
+
+/* Reads a whole totp --file's contents (or stdin, if path is "-") into buf,
+ * NUL-terminated - shared by both of --file's shapes below (a JSON request
+ * object, or a bare otpauth:// URI/Base32 secret - see totp_file_is_json()
+ * and cmd_totp()'s own --file handling for how those are told apart).
+ * Deliberately errors out rather than silently parsing a truncated prefix
+ * if the file is bigger than buf_cap-1 bytes - checked by trying to read
+ * one byte past the fill, not by trusting a short read to mean "that was
+ * everything" (a file exactly buf_cap-1 bytes long looks identical to a
+ * longer one after the first fread() otherwise). Plain stderr text on
+ * failure, not a JSON error body - this is a host-side file access problem
+ * (wrong path, permissions, too large), not something either --file
+ * shape's own error reporting is for. Returns 0 on success, -1 (having
+ * already printed why) on failure. err_prefix is the leading word on any
+ * printed message ("totp" for cmd_totp()'s own --file, "serve" for
+ * serve_load_secret_file() below reusing this same reader for a --secret
+ * NAME=PATH file) - so an error is never misattributed to the wrong
+ * command. */
+static int totp_read_request_file(const char *err_prefix, const char *path, char *buf, size_t buf_cap)
+{
+    FILE *f;
+    size_t n;
+
+    if (!strcmp(path, "-")) {
+        f = stdin;
+    } else {
+        f = fopen(path, "r");
+
+        if (!f) {
+            fprintf(stderr, "%s: %s: %s\n", err_prefix, path, strerror(errno));
+            return -1;
+        }
+    }
+
+    n = fread(buf, 1, buf_cap - 1, f);
+
+    if (ferror(f)) {
+        fprintf(stderr, "%s: %s: read error\n", err_prefix, path);
+
+        if (f != stdin)
+            fclose(f);
+
+        return -1;
+    }
+
+    if (n == buf_cap - 1 && fgetc(f) != EOF) {
+        fprintf(stderr, "%s: %s: request is too large (max %d bytes)\n", err_prefix, path, (int)(buf_cap - 1));
+
+        if (f != stdin)
+            fclose(f);
+
+        return -1;
+    }
+
+    buf[n] = '\0';
+
+    if (f != stdin)
+        fclose(f);
+
+    return 0;
+}
+
+/* --file <path> is the JSON request/response shape when path ends in
+ * ".json" (case-insensitive), and the simpler otpauth:// URI-or-bare-
+ * Base32-secret shape otherwise (including "-" for stdin, which has no
+ * extension to check at all - see cmd_totp()'s own --file handling). A
+ * real filename decides it, not the content, so what a file IS never
+ * depends on guessing from its first byte. */
+static int totp_file_is_json(const char *path)
+{
+    static const char suffix[] = ".json";
+    size_t path_len = strlen(path);
+    size_t suffix_len = strlen(suffix);
+
+    if (path_len < suffix_len)
+        return 0;
+
+    return !strcasecmp(path + (path_len - suffix_len), suffix);
+}
+
+/* Trims leading/trailing whitespace (space, tab, CR, LF) from s in place -
+ * used for --file's non-JSON shape (see totp_file_is_json() above): a
+ * bare secret or otpauth:// URI saved to a file very often picks up a
+ * trailing newline from the editor or "echo" that created it, and that
+ * must not become part of the secret itself. */
+static void trim_whitespace_inplace(char *s)
+{
+    char *start = s;
+    char *end;
+
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')
+        start++;
+
+    end = start + strlen(start);
+
+    while (end > start &&
+            (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n'))
+        end--;
+
+    *end = '\0';
+
+    if (start != s)
+        memmove(s, start, (size_t)(end - start) + 1);
+}
+
+static int cmd_totp(int argc, char **argv)
+{
+    static const char usage_msg[] =
+        "Usage: nshbox totp --secret <base32> [options]\n"
+        "       nshbox totp --secret <text> --text [options]\n"
+        "       nshbox totp --url <otpauth-uri> [options]\n"
+        "       nshbox totp --file <path> [options]\n"
+        "\n"
+        "Secret input (exactly one):\n"
+        "  --secret <value>   Base32-encoded TOTP secret (default), or literal\n"
+        "                     text bytes with --text.\n"
+        "  --url <uri>        An otpauth://totp/... provisioning URI - its own\n"
+        "                     secret, algorithm, digits and period, each\n"
+        "                     overridable below.\n"
+        "  --file <path>      A *.json request (see nshbox/README.md's \"totp\"\n"
+        "                     section for that shape); otherwise an\n"
+        "                     otpauth:// URI or a bare Base32 secret, one per\n"
+        "                     file (\"-\" for stdin - never treated as *.json).\n"
+        "\n"
+        "TOTP options (override a --url's/otpauth-file's own values; unused by\n"
+        "a *.json --file, which supplies all of these itself):\n"
+        "  --algorithm sha1|sha256|sha512   default: sha256 (sha1 for --url)\n"
+        "  --digits 6|7|8                   default: 6\n"
+        "  --period seconds                 default: 30\n"
+        "  --time unix-time                 default: now (never taken from a URI)\n";
+
+    const char *secret_arg = NULL;
+    const char *url_arg = NULL;
+    const char *file_arg = NULL;
+    int text_flag = 0;
+    int have_algorithm_arg = 0;
+    /* Default is SHA256, not the more common SHA1 - deliberate: SHA1 is only
+     * the de facto default because phone authenticator apps (Google/Microsoft
+     * Authenticator, Authy) hardcode it and support nothing else, and this is
+     * not aimed at those - it is a device-to-device shared secret (see
+     * nshbox/README.md's "totp" section), where nothing forces that
+     * constraint. --algorithm sha1 remains available for anyone who does
+     * need a phone-app-compatible secret; an otpauth URI's OWN default is
+     * SHA1 instead, unaffected by this one (see totp_parse_otpauth_uri()). */
+    totp_algo_t algo = TOTP_SHA256;
+    int have_digits_arg = 0;
+    long digits = 6;
+    int have_period_arg = 0;
+    long period = 30;
+    long long time_arg = -1;   /* -1 = not given: use time(NULL) */
+    int have_time_arg = 0;
+    int argi = 1;
+    int source_count;
+
+    while (argi < argc) {
+        if (!strcmp(argv[argi], "--secret")) {
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            secret_arg = argv[argi++];
+        } else if (!strcmp(argv[argi], "--url")) {
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            url_arg = argv[argi++];
+        } else if (!strcmp(argv[argi], "--file")) {
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            file_arg = argv[argi++];
+        } else if (!strcmp(argv[argi], "--text")) {
+            text_flag = 1;
+            argi++;
+        } else if (!strcmp(argv[argi], "--algorithm")) {
+            if (++argi >= argc || totp_algo_from_name(argv[argi], &algo) != 0) {
+                fprintf(stderr, "totp: invalid --algorithm (want sha1, sha256 or sha512)\n");
+                return 2;
+            }
+
+            have_algorithm_arg = 1;
+            argi++;
+        } else if (!strcmp(argv[argi], "--digits")) {
+            char *end;
+
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            errno = 0;
+            digits = strtol(argv[argi], &end, 10);
+
+            if (errno || *end || digits < 6 || digits > 8) {
+                fprintf(stderr, "totp: invalid --digits (want 6, 7 or 8): %s\n", argv[argi]);
+                return 2;
+            }
+
+            have_digits_arg = 1;
+            argi++;
+        } else if (!strcmp(argv[argi], "--period")) {
+            char *end;
+
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            errno = 0;
+            period = strtol(argv[argi], &end, 10);
+
+            if (errno || *end || period <= 0) {
+                fprintf(stderr, "totp: invalid --period (want a positive number of seconds): %s\n", argv[argi]);
+                return 2;
+            }
+
+            have_period_arg = 1;
+            argi++;
+        } else if (!strcmp(argv[argi], "--time")) {
+            char *end;
+
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            errno = 0;
+            time_arg = strtoll(argv[argi], &end, 10);
+
+            if (errno || *end || time_arg < 0) {
+                fprintf(stderr, "totp: invalid --time (want a non-negative Unix timestamp): %s\n", argv[argi]);
+                return 2;
+            }
+
+            have_time_arg = 1;
+            argi++;
+        } else {
+            fprintf(stderr, "%s", usage_msg);
+            return 2;
+        }
+    }
+
+    source_count = (secret_arg != NULL) + (url_arg != NULL) + (file_arg != NULL);
+
+    if (source_count == 0) {
+        fprintf(stderr, "%s", usage_msg);
+        return 2;
+    }
+
+    if (source_count > 1) {
+        fprintf(stderr, "totp: --secret, --url and --file are mutually exclusive\n");
+        return 2;
+    }
+
+    /* --text is a modifier of --secret only - never valid with --url or
+     * --file (an otpauth URI's secret is always Base32; a --file's
+     * content decides its own shape, never --text - see
+     * totp_file_is_json()'s own top comment). */
+    if (text_flag && !secret_arg) {
+        fprintf(stderr, "totp: --text only modifies --secret, and cannot be combined with --url or --file\n");
+        return 2;
+    }
+
+    /* --url mode: an otpauth://totp/... URI supplies the secret, and its
+     * own algorithm/digits/period unless overridden by an explicit CLI
+     * flag (see totp_run_otpauth()'s own top comment for the precedence
+     * rule) - --time is never taken from a URI either way. */
+    if (url_arg) {
+        totp_otpauth_t otp;
+        const char *parse_error;
+
+        if (totp_parse_otpauth_uri(url_arg, &otp, &parse_error) != 0) {
+            /* Never echo the URI itself (it either is the secret, in
+             * cleartext-base32 form, or contains it). */
+            fprintf(stderr, "totp: %s\n", parse_error);
+            return 1;
+        }
+
+        return totp_run_otpauth(&otp, have_algorithm_arg, algo, have_digits_arg, digits,
+                                 have_period_arg, period, time_arg, have_time_arg);
+    }
+
+    /* --file mode: a *.json request/response (see nshbox/README.md's
+     * "totp" section for that exact shape, matching the future "nshbox
+     * serve" HTTP API), or, for any other filename (including "-" for
+     * stdin, which has no extension to check at all), the same
+     * otpauth:// URI --url above accepts, or a bare Base32 secret - one
+     * per file, surrounding whitespace trimmed (a trailing newline from
+     * whatever created the file must not become part of the secret). */
+    if (file_arg) {
+        if (totp_file_is_json(file_arg)) {
+            char request_json[TOTP_JSON_MAX_REQUEST];
+            char response_json[TOTP_JSON_MAX_RESPONSE];
+            int ok;
+
+            if (have_algorithm_arg || have_digits_arg || have_period_arg || have_time_arg) {
+                fprintf(stderr, "totp: a *.json --file supplies its own algorithm/digits/period/time - "
+                                 "it cannot be combined with --algorithm/--digits/--period/--time\n");
+                return 2;
+            }
+
+            if (totp_read_request_file("totp", file_arg, request_json, sizeof(request_json)) != 0)
+                return 1;   /* the helper already printed why */
+
+            ok = totp_handle_json_request(request_json, response_json, sizeof(response_json));
+            printf("%s\n", response_json);
+            return ok ? 0 : 1;
+        }
+
+        {
+            char file_content[TOTP_JSON_MAX_REQUEST];
+
+            if (totp_read_request_file("totp", file_arg, file_content, sizeof(file_content)) != 0)
+                return 1;
+
+            trim_whitespace_inplace(file_content);
+
+            if (!strncmp(file_content, "otpauth://", strlen("otpauth://"))) {
+                totp_otpauth_t otp;
+                const char *parse_error;
+
+                if (totp_parse_otpauth_uri(file_content, &otp, &parse_error) != 0) {
+                    fprintf(stderr, "totp: %s\n", parse_error);
+                    return 1;
+                }
+
+                return totp_run_otpauth(&otp, have_algorithm_arg, algo, have_digits_arg, digits,
+                                         have_period_arg, period, time_arg, have_time_arg);
+            }
+
+            /* A bare Base32 secret, one per file - always Base32 here,
+             * never --text (rejected above in combination with --file
+             * regardless, and this project's own defaults apply exactly
+             * as --secret's own would, since this really is equivalent
+             * to "--secret <this file's trimmed content>"). */
+            {
+                totp_algo_t final_algo = have_algorithm_arg ? algo : TOTP_SHA256;
+                unsigned final_digits = have_digits_arg ? (unsigned)digits : 6;
+                unsigned final_period = have_period_arg ? (unsigned)period : 30;
+                totp_run_result_t run_rc;
+                uint32_t code;
+                long long time_used;
+                time_t clock_now = 0;
+                char code_str[16];
+
+                run_rc = totp_run(file_content, TOTP_ENCODING_BASE32, final_algo, final_digits, final_period,
+                                   time_arg, have_time_arg, &code, &time_used, &clock_now);
+
+                if (run_rc == TOTP_RUN_BAD_SECRET) {
+                    fprintf(stderr, "totp: invalid secret in %s (not valid Base32)\n", file_arg);
+                    return 1;
+                }
+
+                if (run_rc == TOTP_RUN_CLOCK_NOT_SET) {
+                    fprintf(stderr, "totp: system clock is not set yet (reads %lld, before 2020) - "
+                                     "pass --time explicitly, or wait for it to sync\n", (long long)clock_now);
+                    return 1;
+                }
+
+                if (run_rc != TOTP_RUN_OK) {
+                    fprintf(stderr, "totp: could not compute a code\n");
+                    return 1;
+                }
+
+                snprintf(code_str, sizeof(code_str), "%0*u", (int)final_digits, code);
+                printf("%s\n", code_str);
+                return 0;
+            }
+        }
+    }
+
+    /* --secret mode: the plain flag-based path. */
+    {
+        totp_encoding_t encoding = text_flag ? TOTP_ENCODING_TEXT : TOTP_ENCODING_BASE32;
+        totp_run_result_t run_rc;
+        uint32_t code;
+        long long time_used;
+        time_t clock_now = 0;
+        char code_str[16];
+
+        run_rc = totp_run(secret_arg, encoding, algo, (unsigned)digits, (unsigned)period,
+                           time_arg, have_time_arg, &code, &time_used, &clock_now);
+
+        if (run_rc == TOTP_RUN_BAD_SECRET) {
+            /* Never echo the secret itself anywhere, including in this
+             * message (see totp_decode_secret()'s own failure paths). */
+            fprintf(stderr, "totp: invalid --secret (%s)\n",
+                    (encoding == TOTP_ENCODING_TEXT) ? "empty, or too long to fit" : "not valid Base32");
+            return 1;
+        }
+
+        if (run_rc == TOTP_RUN_CLOCK_NOT_SET) {
+            fprintf(stderr, "totp: system clock is not set yet (reads %lld, before 2020) - "
+                             "pass --time explicitly, or wait for it to sync\n", (long long)clock_now);
+            return 1;
+        }
+
+        if (run_rc != TOTP_RUN_OK) {
+            fprintf(stderr, "totp: could not compute a code\n");
+            return 1;
+        }
+
+        /* Script-friendly by design: nothing but the code and a newline (see
+         * this file's own top comment for --json's rule elsewhere - this
+         * command has no --json, its whole output already is one value).
+         * --file's *.json shape above is the one exception, printing the
+         * full JSON response shape instead - see nshbox/README.md's "totp"
+         * section. */
+        snprintf(code_str, sizeof(code_str), "%0*u", (int)digits, code);
+        printf("%s\n", code_str);
+        return 0;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* serve - a small, persistent HTTP API: GET /status, POST /totp        */
+/*                                                                      */
+/* Exactly two routes, deliberately - a small set of purpose-written    */
+/* handlers, never a generic "run any nshbox command over HTTP" bridge  */
+/* (adding a command elsewhere in this file must never silently expose  */
+/* it here too). No TLS, no authentication - NGINX sits in front for    */
+/* either, if remote access is ever needed (a UNIX socket is meant for  */
+/* that: bind --unix, let NGINX proxy to it, never expose --listen      */
+/* itself past 127.0.0.1 unless that is genuinely intended).            */
+/*                                                                      */
+/* No keep-alive: every response closes the connection (Connection:     */
+/* close) and a connection is read exactly once, dispatched, and torn   */
+/* down - this project's own requests/responses are tiny, so the        */
+/* complexity of a second request on the same connection buys nothing   */
+/* here (RFC 6238 requirement's own section on this: "No need for ...   */
+/* complex keep-alive support").                                        */
+/*                                                                      */
+/* A response is written with a single blocking call (netcat_write_all  */
+/* above), not driven by poll()'s own POLLOUT readiness - deliberate:   */
+/* every response this server ever produces is a few hundred bytes, to  */
+/* a local TCP or UNIX peer (127.0.0.1, or a socket on the same         */
+/* filesystem), so this cannot meaningfully stall the event loop in     */
+/* practice. A genuinely stalled or hostile peer could still delay it   */
+/* briefly - an accepted trade-off for a small internal API that is     */
+/* never meant to be exposed to arbitrary internet traffic directly     */
+/* (see the TLS/auth paragraph above), not something a real getty of    */
+/* remote clients would ever be asked to tolerate. It also means a      */
+/* connection never needs a separate "still writing" state: it exists   */
+/* in the connection list only while still being read, and is closed    */
+/* in the very same step that sends its response. */
+
+#define SERVE_MAX_REQUEST         4096   /* headers + body, generous for this API */
+#define SERVE_MAX_RESPONSE_BODY    256   /* matches TOTP_JSON_MAX_RESPONSE - every body here is that small */
+#define SERVE_MAX_RESPONSE         512   /* the full response (status line + headers + body) */
+#define SERVE_MAX_METHOD             8
+#define SERVE_MAX_PATH              64
+#define SERVE_MAX_ACCEPT            64   /* only ever checked for an "application/json" substring - generous already */
+#define SERVE_MAX_CONN              16   /* simultaneous connections - see cmd_serve()'s own accept() loop */
+#define SERVE_DEFAULT_UNIX_SOCKET "/tmp/nshbox.sock"
+#define SERVE_DEFAULT_UNIX_MODE   0600
+
+#define SERVE_MAX_SECRETS            16   /* --secret entries - generous, see cmd_serve()'s own parsing */
+#define SERVE_MAX_SECRET_NAME        64
+#define SERVE_DEFAULT_SECRET_FILE "/data/nshbox/totp.secret.json"
+#define SERVE_DEFAULT_SECRET_NAME "default"
+
+/* Background-mode log/PID locations - same flat-under-/tmp convention
+ * runtime/sshd.sh already uses for Dropbear (LOG_DIR="/tmp/log", flat, not
+ * nested under a fake var/run; PID_FILE directly at /tmp/<name>.pid) -
+ * boot-scoped state on tmpfs, not flash. Neither is configurable via its
+ * own flag (same as sshd.sh's own LOG_FILE/PID_FILE) - keeps cmd_serve()'s
+ * flag set small; add one later if a real need for a different path
+ * shows up. */
+#define SERVE_DEFAULT_LOG_DIR  "/tmp/log"
+#define SERVE_DEFAULT_LOG_FILE "/tmp/log/nshbox-serve.log"
+#define SERVE_DEFAULT_PID_FILE "/tmp/nshbox-serve.pid"
+
+/* One named secret, decoded once at "nshbox serve" startup from a --secret
+ * NAME=PATH argument (or SERVE_DEFAULT_SECRET_FILE, when no --secret was
+ * given at all - see cmd_serve()'s own startup handling and serve_load_
+ * secret_file() below). Loaded once and kept only in this process's own
+ * memory for its whole lifetime - never touched again per request, so
+ * POST /totp's "name" lookup (serve_find_secret() below) is a plain
+ * in-memory string comparison against a fixed, operator-chosen list,
+ * never a filesystem path built from anything a caller sent (the whole
+ * point of naming secrets at all: a caller selects one of these by name,
+ * but can never make this process open an arbitrary file). token/has_token
+ * are optional per secret (see serve_load_secret_file() below): when set,
+ * POST /totp must present the same token to use this secret, or gets 401. */
+typedef struct {
+    char name[SERVE_MAX_SECRET_NAME];
+    char secret[TOTP_JSON_MAX_SECRET];   /* raw text, not yet decoded - same convention totp_request_t/totp_otpauth_t use */
+    totp_encoding_t encoding;
+    totp_algo_t algorithm;
+    unsigned digits;
+    unsigned period;
+    char token[TOTP_JSON_MAX_SECRET];
+    int has_token;
+} serve_secret_t;
+
+static serve_secret_t serve_secrets[SERVE_MAX_SECRETS];
+static int serve_secret_count = 0;
+
+typedef struct serve_conn {
+    int fd;
+
+    char in_buf[SERVE_MAX_REQUEST];
+    size_t in_len;
+
+    int headers_done;
+    size_t body_start;     /* offset into in_buf where the body begins, once headers_done */
+    long content_length;   /* -1 = no Content-Length header seen (no body expected) */
+    char method[SERVE_MAX_METHOD];
+    char path[SERVE_MAX_PATH];
+    char accept_hdr[SERVE_MAX_ACCEPT];   /* "" if no Accept header was sent */
+
+    struct serve_conn *next;
+} serve_conn_t;
+
+/* Wall-clock time cmd_serve() started listening - the only state GET
+ * /status's JSON "uptime" field needs (see serve_dispatch() below). Set
+ * once, near the top of cmd_serve(), before the event loop begins. */
+static time_t serve_start_time;
+
+/* Set by serve_signal_handler() below (async-signal-safe: the one thing
+ * a signal handler is allowed to safely do is set a sig_atomic_t) -
+ * checked once per iteration of cmd_serve()'s own event loop, which also
+ * means a blocked poll() is interrupted (EINTR) the moment a signal
+ * actually arrives, rather than this flag sitting unnoticed until the
+ * next unrelated wakeup. */
+static volatile sig_atomic_t serve_shutdown_requested = 0;
+
+static void serve_signal_handler(int sig)
+{
+    (void)sig;
+    serve_shutdown_requested = 1;
+}
+
+/* Looks for the blank line ("\r\n\r\n") that ends a request's headers
+ * within buf[0..len). Returns the offset right after it (where the body
+ * begins) if found, or 0 if not found yet - headers can never legally
+ * start at offset 0 and end there too (a blank line alone is not a
+ * request line), so 0 doubles safely as "not found". A plain byte-by-
+ * byte scan, not memmem() (a GNU extension this project does not
+ * otherwise depend on) - buf is at most SERVE_MAX_REQUEST bytes, so the
+ * cost of this is never meaningful. */
+static size_t serve_find_body_start(const char *buf, size_t len)
+{
+    size_t i;
+
+    if (len < 4)
+        return 0;
+
+    for (i = 0; i + 4 <= len; i++) {
+        if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' && buf[i + 3] == '\n')
+            return i + 4;
+    }
+
+    return 0;
+}
+
+/* True if the header line [line, line+line_len) is "name:", matched
+ * case-insensitively (HTTP header names are case-insensitive) - name
+ * itself is always one of this file's own literal strings ("content-
+ * length", "transfer-encoding"), never anything derived from the
+ * request. */
+static int serve_header_line_is(const char *line, size_t line_len, const char *name)
+{
+    size_t name_len = strlen(name);
+
+    if (line_len < name_len + 1)
+        return 0;
+
+    if (strncasecmp(line, name, name_len) != 0)
+        return 0;
+
+    return line[name_len] == ':';
+}
+
+/* Parses the request line ("METHOD PATH HTTP/x.y\r\n") and the Content-
+ * Length header (if any) out of conn->in_buf[0..conn->body_start) (the
+ * caller sets body_start first, once serve_find_body_start() above has
+ * confirmed the headers are complete). Fills conn->method/conn->path/
+ * conn->content_length. "Transfer-Encoding" is rejected outright, not
+ * silently ignored - this server never supports a chunked body, and
+ * treating one as if it were a literal body would misinterpret it rather
+ * than fail cleanly (see this section's own top comment on keep-alive
+ * for the same "no need for" reasoning this project's own totp
+ * requirements give for it). No other header is understood at all - not
+ * an error, simply not looked at, same tolerant-of-the-rest convention
+ * the JSON request parser above already follows. Returns 0 on success,
+ * -1 if the request line itself is malformed, a field would not fit its
+ * fixed buffer, or Content-Length is present but not a plain non-
+ * negative integer. */
+static int serve_parse_headers(serve_conn_t *conn)
+{
+    const char *buf = conn->in_buf;
+    const char *end = buf + conn->body_start - 2;   /* excludes the final blank line's own \r\n */
+    const char *line = buf;
+    const char *line_end;
+    const char *sp1, *sp2;
+    size_t method_len, path_len;
+
+    conn->content_length = -1;
+    conn->method[0] = '\0';
+    conn->path[0] = '\0';
+    conn->accept_hdr[0] = '\0';
+
+    line_end = memchr(line, '\r', (size_t)(end - line));
+
+    if (!line_end)
+        return -1;
+
+    sp1 = memchr(line, ' ', (size_t)(line_end - line));
+
+    if (!sp1)
+        return -1;
+
+    method_len = (size_t)(sp1 - line);
+
+    if (method_len == 0 || method_len >= sizeof(conn->method))
+        return -1;
+
+    memcpy(conn->method, line, method_len);
+    conn->method[method_len] = '\0';
+
+    sp2 = memchr(sp1 + 1, ' ', (size_t)(line_end - (sp1 + 1)));
+
+    if (!sp2)
+        return -1;
+
+    path_len = (size_t)(sp2 - (sp1 + 1));
+
+    if (path_len == 0 || path_len >= sizeof(conn->path))
+        return -1;
+
+    memcpy(conn->path, sp1 + 1, path_len);
+    conn->path[path_len] = '\0';
+
+    /* The HTTP-version token after the path is never checked - this
+     * server replies the same way (one response, then close) whether it
+     * says 1.0 or 1.1. */
+
+    line = line_end + 2;
+
+    while (line < end) {
+        line_end = memchr(line, '\r', (size_t)(end - line));
+
+        if (!line_end)
+            return -1;
+
+        if (serve_header_line_is(line, (size_t)(line_end - line), "content-length")) {
+            const char *value = line + strlen("content-length") + 1;
+            char digits[16];
+            size_t n = 0;
+            char *strtol_end;
+            long v;
+
+            while (value < line_end && *value == ' ')
+                value++;
+
+            while (value < line_end && n + 1 < sizeof(digits))
+                digits[n++] = *value++;
+
+            digits[n] = '\0';
+
+            errno = 0;
+            v = strtol(digits, &strtol_end, 10);
+
+            if (errno || *strtol_end || v < 0)
+                return -1;
+
+            conn->content_length = v;
+        } else if (serve_header_line_is(line, (size_t)(line_end - line), "transfer-encoding")) {
+            return -1;
+        } else if (serve_header_line_is(line, (size_t)(line_end - line), "accept")) {
+            const char *value = line + strlen("accept") + 1;
+            size_t n = 0;
+
+            while (value < line_end && *value == ' ')
+                value++;
+
+            while (value < line_end && n + 1 < sizeof(conn->accept_hdr))
+                conn->accept_hdr[n++] = *value++;
+
+            conn->accept_hdr[n] = '\0';
+        }
+
+        line = line_end + 2;
+    }
+
+    return 0;
+}
+
+/* Case-insensitive "needle is a substring of haystack" - a small local
+ * helper rather than strcasestr() (BSD/POSIX.1-2008, but this project
+ * avoids portability extensions it does not already depend on - see
+ * serve_find_body_start()'s own reasoning for not using memmem()).
+ * haystack/needle are both always plain ASCII here (an HTTP header value,
+ * and this file's own fixed literal), so a byte-wise tolower() compare is
+ * enough. */
+static int ascii_ci_contains(const char *haystack, const char *needle)
+{
+    size_t hlen = strlen(haystack);
+    size_t nlen = strlen(needle);
+    size_t i;
+
+    if (nlen == 0 || nlen > hlen)
+        return 0;
+
+    for (i = 0; i + nlen <= hlen; i++) {
+        size_t j = 0;
+
+        while (j < nlen && tolower((unsigned char)haystack[i + j]) == tolower((unsigned char)needle[j]))
+            j++;
+
+        if (j == nlen)
+            return 1;
+    }
+
+    return 0;
+}
+
+/* Whether conn asked for a JSON response body via its Accept header - the
+ * only format negotiation this server does: a plain, presence-based check
+ * ("does Accept mention application/json at all"), not real RFC 7231
+ * content negotiation (no q-values, no preference ordering - matches this
+ * file's own "small, bounded parsing, not a general parser" approach
+ * elsewhere, e.g. the totp JSON request parser above). Each route in
+ * serve_dispatch() below picks its own default body shape when this is
+ * false - GET /status and POST /totp both default to a short plain-text
+ * body, only switching to JSON when this is true. */
+static int serve_wants_json(const serve_conn_t *conn)
+{
+    return ascii_ci_contains(conn->accept_hdr, "application/json");
+}
+
+/* Builds the full wire-format HTTP response (status line, minimal fixed
+ * headers, blank line, body) into out. status_code/status_text/content_type/
+ * body are always ones this file itself chose (see serve_dispatch() below) -
+ * a small fixed set of HTTP statuses, a content type that is always either
+ * "application/json" or "text/plain", and a body that is always one of the
+ * fixed-shape JSON documents totp_build_response_json()/
+ * totp_build_error_json()/serve_dispatch()'s own literals already
+ * produced, so no further escaping is needed here. Returns the number of
+ * bytes written. Falls back to a minimal, always-safe 500 if body
+ * somehow would not fit out_cap (should never happen, given how small
+ * and bounded every real body here is - never trusted blindly anyway). */
+static int serve_build_response(char *out, size_t out_cap, int status_code, const char *status_text,
+                                 const char *content_type, const char *body)
+{
+    int n = snprintf(out, out_cap,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %zu\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "%s",
+        status_code, status_text, content_type, strlen(body), body);
+
+    if (n < 0 || (size_t)n >= out_cap) {
+        static const char fallback_body[] = "{\"error\":\"internal\"}";
+
+        n = snprintf(out, out_cap,
+            "HTTP/1.1 500 Internal Server Error\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: %zu\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "%s",
+            sizeof(fallback_body) - 1, fallback_body);
+
+        if (n < 0)
+            n = 0;
+        else if ((size_t)n >= out_cap)
+            n = (int)out_cap - 1;
+    }
+
+    return n;
+}
+
+/* Logs one failed request to stderr - the operator-facing counterpart to
+ * every error response this section produces: the network response stays
+ * minimal by design (a small fixed message, or nothing at all for 401 -
+ * see the token check in serve_dispatch() below), so this is the ONLY
+ * place the actual reason for a failure is ever visible at all. message
+ * must always be one of this file's own fixed literals (same rule as
+ * every response body here) - never a secret, a token, or any other
+ * caller-supplied text, matching this file's own "nothing here is ever
+ * logged except ..." rule (see nshbox/README.md's "serve" section). */
+static void serve_log_error(const serve_conn_t *conn, int status_code, const char *status_text, const char *message)
+{
+    fprintf(stderr, "serve: %s %s -> %d %s: %s\n", conn->method, conn->path, status_code, status_text, message);
+}
+
+/* Fills status_code/status_text/content_type/body with a fixed error
+ * message - either wrapped as {"error": "<message>"} or as the message's
+ * own plain-text body, following the same Accept-based choice every other
+ * response in this section makes (see serve_wants_json() above), and logs
+ * it via serve_log_error() above. Shared by every fixed, static error
+ * response serve_dispatch() below ever produces (a 4xx from routing
+ * itself, or from POST /totp's own named-secret lookup), so they cannot
+ * drift into slightly different shapes. message must always be one of
+ * this file's own fixed literals, never anything derived from the
+ * request. */
+static void serve_fill_error_response(const serve_conn_t *conn, int status_code, const char *status_text,
+                                       const char *message, int *out_status_code, const char **out_status_text,
+                                       const char **content_type, char *body, size_t body_cap)
+{
+    serve_log_error(conn, status_code, status_text, message);
+
+    *out_status_code = status_code;
+    *out_status_text = status_text;
+
+    if (serve_wants_json(conn)) {
+        *content_type = "application/json";
+        totp_build_error_json(body, body_cap, message);
+    } else {
+        *content_type = "text/plain";
+        snprintf(body, body_cap, "%s", message);
+    }
+}
+
+/* Fills status_code/status_text/content_type/body from a totp_result_t
+ * (see totp_process_json_request()/serve_run_named_secret() below) -
+ * shared by both ways POST /totp can produce one (the legacy "secret in
+ * the request body" path, and the named-secret path below), so their
+ * response formatting cannot drift apart from each other. Logs a failure
+ * via serve_log_error() above the same way every other error response
+ * here does. */
+static void serve_fill_totp_response(const serve_conn_t *conn, const totp_result_t *result,
+                                      int *status_code, const char **status_text,
+                                      const char **content_type, char *body, size_t body_cap)
+{
+    *status_code = result->ok ? 200 : 400;
+    *status_text = result->ok ? "OK" : "Bad Request";
+
+    if (!result->ok)
+        serve_log_error(conn, *status_code, *status_text, result->error);
+
+    if (serve_wants_json(conn)) {
+        *content_type = "application/json";
+
+        if (result->ok)
+            totp_build_response_json(body, body_cap, result->code, result->period, result->time_value);
+        else
+            totp_build_error_json(body, body_cap, result->error);
+    } else {
+        *content_type = "text/plain";
+        snprintf(body, body_cap, "%s", result->ok ? result->code : result->error);
+    }
+}
+
+/* Loads one secret file (the same two shapes --file/--url accept - see
+ * totp_file_is_json() above: a *.json request object, or an otpauth://
+ * URI/bare Base32 secret) into out, filling name/secret/encoding/
+ * algorithm/digits/period/token/has_token. Called only at "nshbox serve"
+ * startup (see cmd_serve() below), never per request - so a request's own
+ * "name" can only ever select among entries this function has already
+ * loaded into memory, never cause a new file to be opened (see
+ * serve_secret_t's own top comment for why that matters). Prints a plain
+ * stderr message (via totp_read_request_file()/the otpauth-URI parser's
+ * own *error, never the secret itself) and returns -1 on any failure - the
+ * caller must treat that as fatal (fail fast rather than start "serve"
+ * with a broken secret). A *.json file's own "time"/"have_time" are
+ * deliberately never read here - a server's baseline secret configuration
+ * has no business fixing "time" to one value for its whole lifetime; only
+ * its optional "token" is (see totp_request_t's own top comment for why
+ * that field lives there at all). */
+static int serve_load_secret_file(const char *name, const char *path, serve_secret_t *out)
+{
+    char content[TOTP_JSON_MAX_REQUEST];
+
+    strncpy(out->name, name, sizeof(out->name) - 1);
+    out->name[sizeof(out->name) - 1] = '\0';
+
+    if (totp_read_request_file("serve", path, content, sizeof(content)) != 0)
+        return -1;
+
+    if (totp_file_is_json(path)) {
+        totp_request_t req;
+        const char *parse_error;
+
+        if (totp_parse_request_json(content, &req, &parse_error) != 0) {
+            fprintf(stderr, "serve: --secret %s=%s: %s\n", name, path, parse_error);
+            return -1;
+        }
+
+        strncpy(out->secret, req.secret, sizeof(out->secret) - 1);
+        out->secret[sizeof(out->secret) - 1] = '\0';
+        out->encoding = req.encoding;
+        out->algorithm = req.algorithm;
+        out->digits = req.digits;
+        out->period = req.period;
+
+        if (req.have_token) {
+            strncpy(out->token, req.token, sizeof(out->token) - 1);
+            out->token[sizeof(out->token) - 1] = '\0';
+            out->has_token = 1;
+        } else {
+            out->token[0] = '\0';
+            out->has_token = 0;
+        }
+
+        return 0;
+    }
+
+    trim_whitespace_inplace(content);
+    out->token[0] = '\0';
+    out->has_token = 0;
+
+    if (!strncmp(content, "otpauth://", strlen("otpauth://"))) {
+        totp_otpauth_t otp;
+        const char *parse_error;
+
+        if (totp_parse_otpauth_uri(content, &otp, &parse_error) != 0) {
+            fprintf(stderr, "serve: --secret %s=%s: %s\n", name, path, parse_error);
+            return -1;
+        }
+
+        strncpy(out->secret, otp.secret, sizeof(out->secret) - 1);
+        out->secret[sizeof(out->secret) - 1] = '\0';
+        out->encoding = TOTP_ENCODING_BASE32;
+        out->algorithm = otp.algorithm;
+        out->digits = otp.digits;
+        out->period = otp.period;
+        return 0;
+    }
+
+    /* A bare Base32 secret, one per file - same defaults cmd_totp()'s own
+     * --file/--secret paths use (SHA256, 6 digits, 30 seconds). */
+    if (content[0] == '\0' || strlen(content) >= sizeof(out->secret)) {
+        fprintf(stderr, "serve: --secret %s=%s: empty, or too long to be a Base32 secret\n", name, path);
+        return -1;
+    }
+
+    strncpy(out->secret, content, sizeof(out->secret) - 1);
+    out->secret[sizeof(out->secret) - 1] = '\0';
+    out->encoding = TOTP_ENCODING_BASE32;
+    out->algorithm = TOTP_SHA256;
+    out->digits = 6;
+    out->period = 30;
+    return 0;
+}
+
+/* Finds a configured secret by name (a request's "name" field - see
+ * serve_parse_named_request_json() below), or the single configured
+ * secret if name is empty/absent and there is exactly one (either a
+ * single --secret was given, or the well-known SERVE_DEFAULT_SECRET_FILE
+ * was found - see cmd_serve()'s own startup handling) - never anything
+ * more clever than that: with more than one secret configured, an absent
+ * name is ambiguous and returns NULL just like an unknown name does. A
+ * plain linear scan and exact string comparison against a fixed,
+ * operator-chosen in-memory list - never a filesystem path built from
+ * anything a caller sent (see serve_secret_t's own top comment). */
+static const serve_secret_t *serve_find_secret(const char *name)
+{
+    int i;
+
+    if (!name || name[0] == '\0')
+        return (serve_secret_count == 1) ? &serve_secrets[0] : NULL;
+
+    for (i = 0; i < serve_secret_count; i++) {
+        if (!strcmp(serve_secrets[i].name, name))
+            return &serve_secrets[i];
+    }
+
+    return NULL;
+}
+
+/* The request shape POST /totp uses once at least one secret has been
+ * configured (see serve_secret_count above): {"name": "...", "token":
+ * "...", "time": <unix>}. "name" selects which configured secret to use
+ * (may be omitted only when exactly one secret is configured - see
+ * serve_find_secret() above), "token" must match that secret's own
+ * configured token if it has one (see serve_dispatch() below), "time" is
+ * an optional override for testing, same as every other input path.
+ * "secret"/"encoding"/"algorithm"/"digits"/"period" are never accepted
+ * here - those are the operator's decision, made once at startup from
+ * each secret's own file, not the caller's - a request that includes any
+ * of them is rejected outright (a fixed error), so a caller can never
+ * wrongly assume it influenced the result. Unknown keys beyond that are
+ * still ignored, matching totp_parse_request_json()'s own tolerance. */
+typedef struct {
+    char name[SERVE_MAX_SECRET_NAME];
+    int have_name;
+    char token[TOTP_JSON_MAX_SECRET];
+    int have_token;
+    long long time_value;
+    int have_time;
+} serve_named_request_t;
+
+static int serve_parse_named_request_json(const char *json, serve_named_request_t *req, const char **error)
+{
+    const char *p = json;
+
+    req->name[0] = '\0';
+    req->have_name = 0;
+    req->token[0] = '\0';
+    req->have_token = 0;
+    req->time_value = 0;
+    req->have_time = 0;
+
+    json_skip_ws(&p);
+
+    if (json_expect_char(&p, '{') != 0) {
+        *error = "malformed JSON";
+        return -1;
+    }
+
+    json_skip_ws(&p);
+
+    if (*p == '}') {
+        p++;
+        return 0;
+    }
+
+    for (;;) {
+        char key[32];
+
+        json_skip_ws(&p);
+
+        if (json_expect_char(&p, '"') != 0 ||
+                json_parse_plain_string(&p, key, sizeof(key)) != 0) {
+            *error = "malformed JSON";
+            return -1;
+        }
+
+        json_skip_ws(&p);
+
+        if (json_expect_char(&p, ':') != 0) {
+            *error = "malformed JSON";
+            return -1;
+        }
+
+        json_skip_ws(&p);
+
+        if (!strcmp(key, "name")) {
+            if (json_expect_char(&p, '"') != 0 ||
+                    json_parse_plain_string(&p, req->name, sizeof(req->name)) != 0) {
+                *error = "malformed JSON";
+                return -1;
+            }
+
+            req->have_name = 1;
+        } else if (!strcmp(key, "token")) {
+            if (json_expect_char(&p, '"') != 0 ||
+                    json_parse_plain_string(&p, req->token, sizeof(req->token)) != 0) {
+                *error = "malformed JSON";
+                return -1;
+            }
+
+            req->have_token = 1;
+        } else if (!strcmp(key, "time")) {
+            unsigned long long v;
+
+            if (json_parse_uint(&p, &v) != 0) {
+                *error = "malformed JSON";
+                return -1;
+            }
+
+            if (v > (unsigned long long)LLONG_MAX) {
+                *error = "invalid time";
+                return -1;
+            }
+
+            req->time_value = (long long)v;
+            req->have_time = 1;
+        } else if (!strcmp(key, "secret") || !strcmp(key, "encoding") || !strcmp(key, "algorithm") ||
+                   !strcmp(key, "digits") || !strcmp(key, "period")) {
+            *error = "secret/encoding/algorithm/digits/period cannot be set per request when named secrets are configured";
+            return -1;
+        } else {
+            /* Unknown key - skip its value, same tolerance
+             * totp_parse_request_json() uses. */
+            char discard_str[TOTP_JSON_MAX_SECRET];
+            unsigned long long discard_num;
+
+            if (*p == '"') {
+                p++;
+
+                if (json_parse_plain_string(&p, discard_str, sizeof(discard_str)) != 0) {
+                    *error = "malformed JSON";
+                    return -1;
+                }
+            } else if (json_parse_uint(&p, &discard_num) != 0) {
+                *error = "malformed JSON";
+                return -1;
+            }
+        }
+
+        json_skip_ws(&p);
+
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+
+        if (json_expect_char(&p, '}') == 0)
+            break;
+
+        *error = "malformed JSON";
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Runs totp_run() for one already-configured named secret (see
+ * serve_find_secret() above) - the named-secret counterpart to
+ * totp_process_json_request() above, sharing its same totp_run_error_
+ * message() so the two paths never report the same failure differently. */
+static void serve_run_named_secret(const serve_secret_t *secret, long long time_arg, int have_time_arg,
+                                    totp_result_t *out)
+{
+    totp_run_result_t run_rc;
+    uint32_t code;
+    long long time_used;
+
+    out->ok = 0;
+    out->error = NULL;
+
+    run_rc = totp_run(secret->secret, secret->encoding, secret->algorithm, secret->digits, secret->period,
+                       time_arg, have_time_arg, &code, &time_used, NULL);
+
+    if (run_rc != TOTP_RUN_OK) {
+        out->error = totp_run_error_message(run_rc, secret->encoding);
+        return;
+    }
+
+    snprintf(out->code, sizeof(out->code), "%0*u", (int)secret->digits, code);
+    out->period = secret->period;
+    out->time_value = time_used;
+    out->ok = 1;
+}
+
+/* Fills the status_code, status_text, content_type and body outputs with a
+ * plain-text "method not allowed", or the same thing as JSON if conn asked
+ * for it - shared by every route's non-matching-method branch below, so
+ * the two routes' 405s cannot drift apart from each other. */
+static void serve_dispatch_405(const serve_conn_t *conn, int *status_code, const char **status_text,
+                                const char **content_type, char *body, size_t body_cap)
+{
+    serve_fill_error_response(conn, 405, "Method Not Allowed", "method not allowed",
+                               status_code, status_text, content_type, body, body_cap);
+}
+
+/* Routes a fully-received request (conn->method/conn->path parsed, and
+ * conn->in_buf[conn->body_start..] NUL-terminated by the caller if there
+ * is a body) to its handler - the only two this server has (see this
+ * section's own top comment for why deliberately not more). Fills the
+ * status_code, status_text, content_type and body outputs with what
+ * serve_build_response() above needs. GET /status never touches totp or
+ * mbedTLS at all.
+ *
+ * POST /totp has two request shapes, chosen once at startup by whether
+ * any secret was ever configured (serve_secret_count > 0 - see cmd_serve()
+ * below for --secret NAME=PATH and the well-known default secret file):
+ * with none configured, the request supplies its own "secret" directly,
+ * exactly as before named secrets existed (totp_process_json_request()
+ * above - the same request-parsing/code-generation logic "nshbox totp
+ * --file some.json" already exercises); with one or more configured, the
+ * request instead supplies a "name" (serve_parse_named_request_json()
+ * above) naming one of them, plus that secret's "token" if it has one -
+ * the secret value itself is never accepted from a request in this mode.
+ *
+ * Each route picks its own default response shape (see serve_wants_json()
+ * above for the Accept-based override, "with JSON Accept be JSON"): GET
+ * /status and POST /totp both default to a short plain-text body with no
+ * trailing newline (so a caller piping the body straight into another
+ * command, e.g. a TOTP code into a login prompt, never needs to strip
+ * one) - only switching to their fuller JSON shape when Accept asks for
+ * application/json. */
+static void serve_dispatch(const serve_conn_t *conn, int *status_code, const char **status_text,
+                            const char **content_type, char *body, size_t body_cap)
+{
+    if (!strcmp(conn->path, "/status")) {
+        if (strcmp(conn->method, "GET") != 0) {
+            serve_dispatch_405(conn, status_code, status_text, content_type, body, body_cap);
+            return;
+        }
+
+        *status_code = 200;
+        *status_text = "OK";
+
+        if (serve_wants_json(conn)) {
+            *content_type = "application/json";
+            snprintf(body, body_cap, "{\"status\":\"ok\",\"version\":\"%s\",\"uptime\":%lld}",
+                     NSHBOX_VERSION, (long long)(time(NULL) - serve_start_time));
+        } else {
+            *content_type = "text/plain";
+            snprintf(body, body_cap, "ok");
+        }
+
+        return;
+    }
+
+    if (!strcmp(conn->path, "/totp")) {
+        if (strcmp(conn->method, "POST") != 0) {
+            serve_dispatch_405(conn, status_code, status_text, content_type, body, body_cap);
+            return;
+        }
+
+        {
+            /* An empty/absent body parses to "missing secret"/"missing
+             * name" via the normal JSON path (rather than "malformed
+             * JSON" from an empty string) - a clearer, more accurate
+             * answer for the ordinary case of a POST with no body at all. */
+            const char *request_body = (conn->content_length > 0) ? conn->in_buf + conn->body_start : "{}";
+
+            if (serve_secret_count > 0) {
+                serve_named_request_t named_req;
+                const char *parse_error;
+
+                if (serve_parse_named_request_json(request_body, &named_req, &parse_error) != 0) {
+                    serve_fill_error_response(conn, 400, "Bad Request", parse_error,
+                                               status_code, status_text, content_type, body, body_cap);
+                    return;
+                }
+
+                {
+                    const serve_secret_t *secret = serve_find_secret(named_req.have_name ? named_req.name : NULL);
+
+                    if (!secret) {
+                        serve_fill_error_response(conn, 400, "Bad Request",
+                            named_req.have_name ? "unknown secret name"
+                                                 : "name is required (more than one secret is configured)",
+                            status_code, status_text, content_type, body, body_cap);
+                        return;
+                    }
+
+                    if (secret->has_token &&
+                            (!named_req.have_token || strcmp(named_req.token, secret->token) != 0)) {
+                        /* No body at all here, deliberately (unlike every
+                         * other error this section produces) - 401 alone
+                         * already says everything a caller needs to know,
+                         * and a missing vs. wrong token must never be
+                         * distinguishable anyway (see this branch's own
+                         * condition above), so a message would only ever
+                         * repeat the status code in words. Still logged to
+                         * stderr via serve_log_error() below, same as
+                         * every other failure - the empty response body is
+                         * about what the CALLER learns, never about
+                         * leaving the operator with no way to find out
+                         * what happened (see serve_log_error()'s own top
+                         * comment). */
+                        serve_log_error(conn, 401, "Unauthorized", "invalid or missing token");
+                        *status_code = 401;
+                        *status_text = "Unauthorized";
+                        *content_type = "text/plain";
+                        body[0] = '\0';
+                        return;
+                    }
+
+                    {
+                        totp_result_t result;
+
+                        serve_run_named_secret(secret, named_req.time_value, named_req.have_time, &result);
+                        serve_fill_totp_response(conn, &result, status_code, status_text, content_type, body, body_cap);
+                    }
+                }
+
+                return;
+            }
+
+            /* Legacy mode: no named secrets configured, so the request
+             * must supply its own "secret" directly - unchanged from
+             * before named secrets existed. */
+            {
+                totp_result_t result;
+
+                totp_process_json_request(request_body, &result);
+                serve_fill_totp_response(conn, &result, status_code, status_text, content_type, body, body_cap);
+            }
+        }
+
+        return;
+    }
+
+    serve_fill_error_response(conn, 404, "Not Found", "not found",
+                               status_code, status_text, content_type, body, body_cap);
+}
+
+/* Builds and sends conn's HTTP response (see this section's own top
+ * comment for why a blocking write, and why a connection needs no
+ * separate "writing" state). Does NOT close conn->fd - the caller
+ * (serve_read_connection() below, and ultimately cmd_serve()'s own event
+ * loop) is the one and only place responsible for that, for every path
+ * that finishes a connection, response-sent or not; closing it here too
+ * would double-close the same fd once the caller does its own cleanup. */
+static void serve_respond(const serve_conn_t *conn, int status_code, const char *status_text,
+                           const char *content_type, const char *body)
+{
+    char response[SERVE_MAX_RESPONSE];
+    int n = serve_build_response(response, sizeof(response), status_code, status_text, content_type, body);
+
+    /* A failed write here means the peer is already gone - nothing
+     * useful to do about that, the connection is being closed either
+     * way. */
+    netcat_write_all(conn->fd, (const unsigned char *)response, (size_t)n);
+}
+
+/* Reads whatever is newly available on conn, and - once (and only once)
+ * that completes a full request - dispatches it and sends the response
+ * right away. Returns 1 if conn is now finished (its response was sent,
+ * or it failed/disconnected before a full request ever arrived) and
+ * should be removed from the connection list and freed by the caller, or
+ * 0 if it is still waiting for more request bytes. */
+static int serve_read_connection(serve_conn_t *conn)
+{
+    ssize_t n;
+
+    /* "- 1": always keep at least one spare byte in in_buf, so a body
+     * that otherwise fills the rest of the buffer exactly still has room
+     * for the NUL terminator this function writes once the whole body
+     * has arrived, below. */
+    n = read(conn->fd, conn->in_buf + conn->in_len, sizeof(conn->in_buf) - conn->in_len - 1);
+
+    if (n <= 0)
+        return 1;   /* EOF or a real error - nothing usable either way */
+
+    conn->in_len += (size_t)n;
+
+    if (!conn->headers_done) {
+        size_t body_start = serve_find_body_start(conn->in_buf, conn->in_len);
+
+        if (body_start == 0) {
+            if (conn->in_len >= sizeof(conn->in_buf) - 1) {
+                /* Headers are not fully received yet (that is what got us
+                 * here), so conn->accept_hdr is never populated at this
+                 * point - always JSON, not format-negotiated like a
+                 * routed response below. conn->method/path are unset too,
+                 * so this can't go through serve_log_error() - logged
+                 * directly instead, same "operator always sees why"
+                 * principle. */
+                fprintf(stderr, "serve: request too large before headers were fully received -> 413 Payload Too Large\n");
+                serve_respond(conn, 413, "Payload Too Large", "application/json", "{\"error\":\"request too large\"}");
+                return 1;
+            }
+
+            return 0;   /* keep waiting for the rest of the headers */
+        }
+
+        conn->body_start = body_start;
+        conn->headers_done = 1;
+
+        if (serve_parse_headers(conn) != 0) {
+            /* Malformed request line/headers - conn->accept_hdr may be
+             * unset or only partially trustworthy, so this one is also
+             * always JSON rather than routed through serve_wants_json().
+             * conn->method/path may not have been filled in either (that
+             * is what just failed), so this is logged directly rather
+             * than via serve_log_error(). */
+            fprintf(stderr, "serve: malformed request line or headers -> 400 Bad Request\n");
+            serve_respond(conn, 400, "Bad Request", "application/json", "{\"error\":\"malformed request\"}");
+            return 1;
+        }
+    }
+
+    if (conn->content_length > 0) {
+        size_t have = conn->in_len - conn->body_start;
+
+        if (have < (size_t)conn->content_length) {
+            if (conn->body_start + (size_t)conn->content_length >= sizeof(conn->in_buf)) {
+                serve_log_error(conn, 413, "Payload Too Large", "request too large");
+                serve_respond(conn, 413, "Payload Too Large", "application/json", "{\"error\":\"request too large\"}");
+                return 1;
+            }
+
+            return 0;   /* keep waiting for the rest of the body */
+        }
+
+        conn->in_buf[conn->body_start + (size_t)conn->content_length] = '\0';
+    }
+
+    {
+        int status_code;
+        const char *status_text;
+        const char *content_type;
+        char body[SERVE_MAX_RESPONSE_BODY];
+
+        serve_dispatch(conn, &status_code, &status_text, &content_type, body, sizeof(body));
+        serve_respond(conn, status_code, status_text, content_type, body);
+    }
+
+    return 1;
+}
+
+/* Binds and listens on a TCP address:port - always required to be given
+ * explicitly (see cmd_serve()'s own --listen handling for why: no
+ * default, unlike --unix below, since this is the network-facing
+ * option). address_port is split on its LAST ':', so a literal IPv6
+ * address needs brackets ("[::1]:8787" - the common convention this
+ * mirrors). Returns a listening fd, or -1 (having already printed why)
+ * on failure. */
+static int serve_listen_tcp(const char *address_port)
+{
+    char host[128];
+    char port[16];
+    const char *colon = strrchr(address_port, ':');
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *rp;
+    int listen_fd = -1;
+    int yes = 1;
+    int r;
+    size_t host_len;
+
+    if (!colon || colon == address_port) {
+        fprintf(stderr, "serve: --listen needs ADDRESS:PORT (e.g. 127.0.0.1:8787): %s\n", address_port);
+        return -1;
+    }
+
+    host_len = (size_t)(colon - address_port);
+
+    if (host_len >= sizeof(host)) {
+        fprintf(stderr, "serve: --listen address is too long: %s\n", address_port);
+        return -1;
+    }
+
+    memcpy(host, address_port, host_len);
+    host[host_len] = '\0';
+
+    if (host_len >= 2 && host[0] == '[' && host[host_len - 1] == ']') {
+        memmove(host, host + 1, host_len - 2);
+        host[host_len - 2] = '\0';
+    }
+
+    if (strlen(colon + 1) == 0 || strlen(colon + 1) >= sizeof(port)) {
+        fprintf(stderr, "serve: --listen needs ADDRESS:PORT (e.g. 127.0.0.1:8787): %s\n", address_port);
+        return -1;
+    }
+
+    strcpy(port, colon + 1);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    r = getaddrinfo(host, port, &hints, &res);
+
+    if (r != 0) {
+        fprintf(stderr, "serve: --listen %s: %s\n", address_port, gai_strerror(r));
+        return -1;
+    }
+
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        listen_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+
+        if (listen_fd < 0)
+            continue;
+
+        setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+        if (bind(listen_fd, rp->ai_addr, rp->ai_addrlen) == 0)
+            break;
+
+        close(listen_fd);
+        listen_fd = -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (listen_fd < 0) {
+        fprintf(stderr, "serve: could not bind %s: %s\n", address_port, strerror(errno));
+        return -1;
+    }
+
+    if (listen(listen_fd, 8) != 0) {
+        perror("serve: listen");
+        close(listen_fd);
+        return -1;
+    }
+
+    return listen_fd;
+}
+
+/* Binds and listens on a UNIX-domain socket path, removing a stale
+ * socket file left by an earlier run first - only ever if it really is a
+ * socket, never an unrelated file that happens to already exist there
+ * (same check netcat's own listen helper uses) - and setting its
+ * permission bits afterward (mode - see cmd_serve()'s own --unix-mode).
+ * Returns a listening fd, or -1 (having already printed why) on
+ * failure. */
+static int serve_listen_unix(const char *path, mode_t mode)
+{
+    struct sockaddr_un addr;
+    struct stat st;
+    int listen_fd;
+
+    if (strlen(path) >= sizeof(addr.sun_path)) {
+        fprintf(stderr, "serve: --unix path is too long: %s\n", path);
+        return -1;
+    }
+
+    if (lstat(path, &st) == 0) {
+        if (!S_ISSOCK(st.st_mode)) {
+            fprintf(stderr, "serve: %s already exists and is not a socket - not removing it\n", path);
+            return -1;
+        }
+
+        if (unlink(path) != 0) {
+            fprintf(stderr, "serve: could not remove stale socket %s: %s\n", path, strerror(errno));
+            return -1;
+        }
+    }
+
+    listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+    if (listen_fd < 0) {
+        perror("serve: socket");
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, path);
+
+    if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        fprintf(stderr, "serve: could not bind %s: %s\n", path, strerror(errno));
+        close(listen_fd);
+        return -1;
+    }
+
+    if (chmod(path, mode) != 0) {
+        fprintf(stderr, "serve: could not set permissions on %s: %s\n", path, strerror(errno));
+        close(listen_fd);
+        unlink(path);
+        return -1;
+    }
+
+    if (listen(listen_fd, 8) != 0) {
+        perror("serve: listen");
+        close(listen_fd);
+        unlink(path);
+        return -1;
+    }
+
+    return listen_fd;
+}
+
+static int cmd_serve(int argc, char **argv)
+{
+    static const char usage_msg[] =
+        "Usage: nshbox serve [--listen <address:port>] [--unix [<path>]]\n"
+        "                     [--unix-mode <octal>] [--secret <name>=<path>]...\n"
+        "                     [--foreground]\n"
+        "\n"
+        "At least one of --listen/--unix is required. --listen always needs an\n"
+        "explicit address:port (never a default - the network-facing option).\n"
+        "--unix may be given with no path, defaulting to " SERVE_DEFAULT_UNIX_SOCKET "\n"
+        "(--unix-mode sets its permission bits, default 0600).\n"
+        "\n"
+        "--secret <name>=<path> (repeatable) loads a TOTP secret from <path> (a\n"
+        "*.json request object, an otpauth:// URI, or a bare Base32 secret - the\n"
+        "same shapes totp --file accepts) under <name>; POST /totp then selects\n"
+        "it by \"name\" instead of taking a secret in the request at all. With no\n"
+        "--secret given, " SERVE_DEFAULT_SECRET_FILE " is used automatically if present.\n"
+        "\n"
+        "By default, once startup succeeds, serve backgrounds itself (detaches from\n"
+        "the controlling terminal) and sends its own stdout/stderr to\n"
+        SERVE_DEFAULT_LOG_FILE " (created, appended across restarts) - its PID is\n"
+        "written to " SERVE_DEFAULT_PID_FILE ". --foreground stays attached instead,\n"
+        "logging on stderr directly and writing no PID file, same as every other\n"
+        "nshbox command.\n";
+
+    const char *listen_arg = NULL;
+    const char *unix_arg = NULL;
+    int unix_given = 0;
+    int foreground = 0;
+    mode_t unix_mode = SERVE_DEFAULT_UNIX_MODE;
+    int argi = 1;
+    int tcp_fd = -1;
+    int unix_fd = -1;
+    const char *unix_path = NULL;
+    serve_conn_t *conns = NULL;
+    struct sigaction sa;
+
+    while (argi < argc) {
+        if (!strcmp(argv[argi], "--listen")) {
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            listen_arg = argv[argi++];
+        } else if (!strcmp(argv[argi], "--unix")) {
+            unix_given = 1;
+            argi++;
+
+            if (argi < argc && argv[argi][0] != '-')
+                unix_arg = argv[argi++];
+        } else if (!strcmp(argv[argi], "--unix-mode")) {
+            char *end;
+            long v;
+
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            errno = 0;
+            v = strtol(argv[argi], &end, 8);
+
+            if (errno || *end || v < 0 || v > 0777) {
+                fprintf(stderr, "serve: invalid --unix-mode (want an octal value, e.g. 0600): %s\n", argv[argi]);
+                return 2;
+            }
+
+            unix_mode = (mode_t)v;
+            argi++;
+        } else if (!strcmp(argv[argi], "--secret")) {
+            const char *arg;
+            const char *eq;
+            size_t name_len;
+            int j;
+
+            if (++argi >= argc) {
+                fprintf(stderr, "%s", usage_msg);
+                return 2;
+            }
+
+            arg = argv[argi++];
+            eq = strchr(arg, '=');
+
+            if (!eq || eq == arg || eq[1] == '\0') {
+                fprintf(stderr, "serve: --secret needs <name>=<path> (got: %s)\n", arg);
+                return 2;
+            }
+
+            if (serve_secret_count >= SERVE_MAX_SECRETS) {
+                fprintf(stderr, "serve: too many --secret entries (max %d)\n", SERVE_MAX_SECRETS);
+                return 2;
+            }
+
+            name_len = (size_t)(eq - arg);
+
+            if (name_len >= SERVE_MAX_SECRET_NAME) {
+                fprintf(stderr, "serve: --secret name too long: %s\n", arg);
+                return 2;
+            }
+
+            for (j = 0; j < serve_secret_count; j++) {
+                if (strlen(serve_secrets[j].name) == name_len && !strncmp(serve_secrets[j].name, arg, name_len)) {
+                    fprintf(stderr, "serve: duplicate --secret name: %.*s\n", (int)name_len, arg);
+                    return 2;
+                }
+            }
+
+            {
+                char name_buf[SERVE_MAX_SECRET_NAME];
+
+                memcpy(name_buf, arg, name_len);
+                name_buf[name_len] = '\0';
+
+                if (serve_load_secret_file(name_buf, eq + 1, &serve_secrets[serve_secret_count]) != 0)
+                    return 1;   /* the helper already printed why */
+            }
+
+            serve_secret_count++;
+        } else if (!strcmp(argv[argi], "--foreground")) {
+            foreground = 1;
+            argi++;
+        } else {
+            fprintf(stderr, "%s", usage_msg);
+            return 2;
+        }
+    }
+
+    if (!listen_arg && !unix_given) {
+        fprintf(stderr, "%s", usage_msg);
+        return 2;
+    }
+
+    if (serve_secret_count == 0 && access(SERVE_DEFAULT_SECRET_FILE, F_OK) == 0) {
+        if (serve_load_secret_file(SERVE_DEFAULT_SECRET_NAME, SERVE_DEFAULT_SECRET_FILE, &serve_secrets[0]) != 0)
+            return 1;   /* the helper already printed why */
+
+        serve_secret_count = 1;
+        fprintf(stderr, "serve: using default secret from %s\n", SERVE_DEFAULT_SECRET_FILE);
+    }
+
+    if (listen_arg) {
+        tcp_fd = serve_listen_tcp(listen_arg);
+
+        if (tcp_fd < 0)
+            return 1;
+
+        fprintf(stderr, "serve: listening on %s\n", listen_arg);
+    }
+
+    if (unix_given) {
+        unix_path = unix_arg ? unix_arg : SERVE_DEFAULT_UNIX_SOCKET;
+        unix_fd = serve_listen_unix(unix_path, unix_mode);
+
+        if (unix_fd < 0) {
+            if (tcp_fd >= 0)
+                close(tcp_fd);
+
+            return 1;
+        }
+
+        fprintf(stderr, "serve: listening on unix:%s\n", unix_path);
+    }
+
+    if (!foreground) {
+        int log_fd;
+        pid_t pid;
+
+        mkdir(SERVE_DEFAULT_LOG_DIR, 0755);   /* best-effort - matches runtime/sshd.sh's own defensive "mkdir -p" */
+
+        log_fd = open(SERVE_DEFAULT_LOG_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+
+        if (log_fd < 0) {
+            fprintf(stderr, "serve: %s: %s\n", SERVE_DEFAULT_LOG_FILE, strerror(errno));
+
+            if (tcp_fd >= 0)
+                close(tcp_fd);
+
+            if (unix_fd >= 0) {
+                close(unix_fd);
+                unlink(unix_path);
+            }
+
+            return 1;
+        }
+
+        pid = fork();
+
+        if (pid < 0) {
+            fprintf(stderr, "serve: fork: %s\n", strerror(errno));
+            close(log_fd);
+
+            if (tcp_fd >= 0)
+                close(tcp_fd);
+
+            if (unix_fd >= 0) {
+                close(unix_fd);
+                unlink(unix_path);
+            }
+
+            return 1;
+        }
+
+        if (pid > 0) {
+            /* Parent: report and exit right away - the whole point of
+             * backgrounding is that the invoking shell gets control back
+             * immediately, with no need for the caller to add their own
+             * trailing "&". The listeners/log fd are NOT unlinked/torn
+             * down here - the child still owns and uses them, this is
+             * only the parent's own now-redundant copies. */
+            fprintf(stderr, "serve: backgrounded, pid %ld (log: %s)\n", (long)pid, SERVE_DEFAULT_LOG_FILE);
+            close(log_fd);
+
+            if (tcp_fd >= 0)
+                close(tcp_fd);
+
+            if (unix_fd >= 0)
+                close(unix_fd);
+
+            return 0;
+        }
+
+        /* Child: detach from the controlling terminal, then redirect
+         * stdin/stdout/stderr - from here on, every fprintf(stderr, ...)
+         * in this file (including serve_log_error() above) goes to
+         * SERVE_DEFAULT_LOG_FILE, not a terminal nobody is watching
+         * anymore. */
+        setsid();
+
+        {
+            int null_fd = open("/dev/null", O_RDONLY);
+
+            if (null_fd >= 0) {
+                dup2(null_fd, STDIN_FILENO);
+
+                if (null_fd != STDIN_FILENO)
+                    close(null_fd);
+            }
+        }
+
+        dup2(log_fd, STDOUT_FILENO);
+        dup2(log_fd, STDERR_FILENO);
+
+        if (log_fd != STDOUT_FILENO && log_fd != STDERR_FILENO)
+            close(log_fd);
+
+        /* The real daemon's own PID, written after fork - same reasoning
+         * runtime/sshd.sh documents for Dropbear's own -P flag: a PID
+         * file written before forking would only ever hold the short-
+         * lived parent's PID, not the process actually still running. */
+        {
+            FILE *pf = fopen(SERVE_DEFAULT_PID_FILE, "w");
+
+            if (pf) {
+                fprintf(pf, "%ld\n", (long)getpid());
+                fclose(pf);
+            }
+        }
+
+        /* First line the log file itself ever receives - every earlier
+         * startup message (listening on ..., backgrounded, pid ...) went
+         * to the original terminal, before this redirect took effect.
+         * Without this, a log file with no failed requests yet and no
+         * shutdown yet would stay empty forever, giving no way to confirm
+         * from the log alone that the daemon is actually running. */
+        fprintf(stderr, "serve: running in background, pid %ld\n", (long)getpid());
+    }
+
+    serve_start_time = time(NULL);
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = serve_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+
+    while (!serve_shutdown_requested) {
+        struct pollfd fds[2 + SERVE_MAX_CONN];
+        int nfds = 0;
+        int tcp_idx = -1;
+        int unix_idx = -1;
+        serve_conn_t *conn_idx[SERVE_MAX_CONN];
+        int conn_fds_idx[SERVE_MAX_CONN];
+        int conn_count = 0;
+        serve_conn_t *c;
+        int r;
+        int i;
+
+        if (tcp_fd >= 0) {
+            fds[nfds].fd = tcp_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            tcp_idx = nfds++;
+        }
+
+        if (unix_fd >= 0) {
+            fds[nfds].fd = unix_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            unix_idx = nfds++;
+        }
+
+        for (c = conns; c != NULL && conn_count < SERVE_MAX_CONN; c = c->next) {
+            fds[nfds].fd = c->fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            conn_idx[conn_count] = c;
+            conn_fds_idx[conn_count] = nfds;
+            conn_count++;
+            nfds++;
+        }
+
+        r = poll(fds, (nfds_t)nfds, -1);
+
+        if (r < 0) {
+            if (errno == EINTR)
+                continue;
+
+            perror("serve: poll");
+            break;
+        }
+
+        if (tcp_idx >= 0 && (fds[tcp_idx].revents & POLLIN) && conn_count < SERVE_MAX_CONN) {
+            int fd = accept(tcp_fd, NULL, NULL);
+
+            if (fd >= 0) {
+                serve_conn_t *nc = calloc(1, sizeof(*nc));
+
+                if (nc) {
+                    nc->fd = fd;
+                    nc->content_length = -1;
+                    nc->next = conns;
+                    conns = nc;
+                } else {
+                    close(fd);
+                }
+            }
+        }
+
+        if (unix_idx >= 0 && (fds[unix_idx].revents & POLLIN) && conn_count < SERVE_MAX_CONN) {
+            int fd = accept(unix_fd, NULL, NULL);
+
+            if (fd >= 0) {
+                serve_conn_t *nc = calloc(1, sizeof(*nc));
+
+                if (nc) {
+                    nc->fd = fd;
+                    nc->content_length = -1;
+                    nc->next = conns;
+                    conns = nc;
+                } else {
+                    close(fd);
+                }
+            }
+        }
+
+        for (i = 0; i < conn_count; i++) {
+            serve_conn_t *cn = conn_idx[i];
+
+            if (fds[conn_fds_idx[i]].revents == 0)
+                continue;
+
+            if (serve_read_connection(cn)) {
+                serve_conn_t **pp = &conns;
+
+                while (*pp && *pp != cn)
+                    pp = &(*pp)->next;
+
+                if (*pp)
+                    *pp = cn->next;
+
+                close(cn->fd);
+                free(cn);
+            }
+        }
+    }
+
+    {
+        serve_conn_t *c = conns;
+
+        while (c) {
+            serve_conn_t *next = c->next;
+            close(c->fd);
+            free(c);
+            c = next;
+        }
+    }
+
+    if (tcp_fd >= 0)
+        close(tcp_fd);
+
+    if (unix_fd >= 0) {
+        close(unix_fd);
+        unlink(unix_path);
+    }
+
+    if (!foreground)
+        unlink(SERVE_DEFAULT_PID_FILE);
+
+    fprintf(stderr, "serve: shut down\n");
+    return 0;
+}
+
 #endif /* NSHBOX_NO_CHECKSUMS */
 
 
@@ -7838,6 +11318,8 @@ static const command_t commands[] = {
     { "sha384sum",cmd_sha384sum,"Print SHA-384 checksums [--json]" },
     { "sha512sum",cmd_sha512sum,"Print SHA-512 checksums [--json]" },
     { "md5sum",   cmd_md5sum,   "Print MD5 checksums [--json]" },
+    { "totp",     cmd_totp,     "Generate a TOTP code (--secret [--text] | --url <uri> | --file <path>) [--algorithm/--digits/--period/--time]" },
+    { "serve",    cmd_serve,    "GET /status, POST /totp over TCP and/or a UNIX socket [--listen host:port] [--unix [path]] [--unix-mode mode] [--secret name=path] [--foreground]" },
 #endif
     { "base64",   cmd_base64,   "Base64 encode/decode (-d decode, -u URL-safe alphabet, -w cols wrap, 0 = no wrap) [file]" },
     { "jwt",      cmd_jwt,      "Decode a JWT's payload (--header for header, --all for both) - no signature verification [token]" },
@@ -7846,6 +11328,8 @@ static const command_t commands[] = {
     { "hostname", cmd_hostname, "Print the system hostname (-f fully-qualified)" },
     { "dig",      cmd_dig,      "DNS lookup [--json] [name] [A|CNAME|MX|TXT|PTR] | -x ip (reverse)" },
     { "nslookup", cmd_nslookup, "DNS lookup [--json] [-type=A|CNAME|MX|TXT|PTR] name|ip (ip = reverse)" },
+    { "netcat",   cmd_netcat,   "TCP/UNIX socket connect or listen-once, relays stdin/stdout - see 'nshbox netcat' with no args" },
+    { "nc",       cmd_netcat,   "Alias for netcat" },
     { "install",  cmd_install,  "Create applet symlinks in nshbox directory (-f)" },
     { NULL,       NULL,         NULL }
 };
@@ -8000,11 +11484,13 @@ static void usage(void)
      * grouped by theme in source order (checksums together, DNS commands
      * together, base64/jwt/json together, ...), which is more readable
      * when working on the code; only the display order differs here.
-     * "install" is excluded from this list and shown in its own "Setup:"
-     * section below instead, since it changes the filesystem rather than
-     * reading/reporting anything, unlike every other command here. */
+     * "install" and "serve" are excluded from this list and shown in
+     * their own sections below instead - "install" changes the
+     * filesystem rather than reading/reporting anything, and "serve"
+     * does not run once and exit like every other command here at all,
+     * it starts a persistent process that keeps running until signalled. */
     for (cmd = commands; cmd->name; cmd++) {
-        if (strcmp(cmd->name, "install") == 0)
+        if (strcmp(cmd->name, "install") == 0 || strcmp(cmd->name, "serve") == 0)
             continue;
         sorted[count++] = cmd;
     }
@@ -8023,6 +11509,19 @@ static void usage(void)
 
     for (cmd = commands; cmd->name; cmd++) {
         if (strcmp(cmd->name, "install") != 0)
+            continue;
+
+        printf(
+            "  %-13s %s\n",
+            cmd->name,
+            cmd->help
+        );
+    }
+
+    printf("\nServices (long-running, not a one-shot command):\n");
+
+    for (cmd = commands; cmd->name; cmd++) {
+        if (strcmp(cmd->name, "serve") != 0)
             continue;
 
         printf(

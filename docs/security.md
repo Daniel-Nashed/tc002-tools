@@ -38,9 +38,11 @@ refuse public-key authentication too. Do not read this field as meaning anything
 
 ## Network exposure
 
-- Dropbear listens on **port 2222**, not 22, during evaluation - deliberately, to avoid colliding with assumptions (a
-  host's own SSH daemon, existing firewall rules written for 22, monitoring that only watches 22) while this project is
-  still being verified. This is not a security control by itself; do not rely on port obscurity.
+- Dropbear listens on the standard **port 22**. The TC002 ships with no SSH daemon of its own, so there is nothing on
+  that port to collide with - Dropbear is the only thing that will ever be there, and picking a non-standard port
+  would only cost admins a `-p <port>` they have to remember for no actual benefit. (An earlier version of this
+  project defaulted to 2222 during initial evaluation; that reasoning no longer applied once it was confirmed the
+  device has no pre-existing service on 22.)
 - **SSH access here means root access.** Treat any network the device is reachable from as a network you trust with root
   on that device. This project does not implement any additional access control (no fail2ban-equivalent, no rate
   limiting, no IP allowlisting) - that is the operator's responsibility if the device is reachable beyond a private
@@ -67,7 +69,7 @@ deliberate step, run from a different place:
 
 ```sh
 install/disable_adb.sh                    # 1. push the tool, from your host (one-time)
-ssh -p 2222 root@DEVICE_IP                 # 2. confirm SSH actually works - this IS the verification
+ssh root@DEVICE_IP                         # 2. confirm SSH actually works - this IS the verification
 /data/bin/disable_adb.sh                   # 3. run it FROM THE DEVICE, over that same SSH session
 ```
 
