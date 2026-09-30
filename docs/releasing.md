@@ -71,3 +71,12 @@ Or in one step, which pulls first and then deploys (a version can follow `--rele
 - **Device discovery** needs `tc002-discover`, which releases do not include yet, so give the device address with
   `--ip`. `./verify.sh` needs Docker and is for built artifacts; the checksum checks above replace it for a pulled
   release.
+
+## Updating a device directly from GitHub, without a host round-trip
+
+Once a device is deployed, `update-from-github` (installed to `INSTALL_PREFIX/bin` by `install_tools.sh`/
+`update_tools.sh`) does the same job as `pull-release.sh` above, but runs ON the device itself, over an
+already-established SSH session, using `nshbox wget` instead of `curl` - no host with ADB/SSH reachability needed.
+Same trust model: this project's own releases, verified against the `.sha256` sidecar GitHub publishes next to each
+asset. See [`device_layout.md`](device_layout.md#update-from-github) for what it updates and what it deliberately
+does not.

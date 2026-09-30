@@ -39,7 +39,8 @@ over SSH/SCP (not ADB), then runs "INSTALL_PREFIX/bin/nshbox install -f" to
 refresh its applet symlinks - the same tool list and post-install hook
 install_tools.sh uses, just over an already-established SSH connection
 instead of ADB. Also re-pushes runtime/kilo.sh as vi/edit if kilo was
-built, same as install_tools.sh.
+built, and runtime/update_from_github.sh as update-from-github
+(unconditionally), same as install_tools.sh.
 
 Also rebuilds and pushes the compressed-on-demand archive (curl/nginx/7zz,
 plus the OpenSSL CLI with --with-openssl - see install_on_demand.sh) if
@@ -85,8 +86,17 @@ done
 load_config "$CONFIG_FILE"
 require_device_ssh
 
-# Mirrors install_tools.sh's push_kilo_wrapper() exactly, just over SSH -
-# see its own comments there for why vi/edit exist at all.
+# Mirrors install_tools.sh's push_kilo_wrapper(), over SSH - see its own
+# comments there for why vi/edit exist at all - but with one real
+# difference install_tools.sh does not need: it must not overwrite vi/edit
+# if install_vim.sh has since claimed them on THIS device (confirmed as a
+# real bug, 2026-09-30 - update_tools.sh silently reset vi/edit back to
+# kilo on a device that had vim deployed). Checked against the DEVICE's
+# own state over SSH, not against dist/vim existing locally - "was vim
+# built" and "does THIS device have it" are different questions (see
+# verify_installation.sh's --with-vim, which hit the exact same
+# distinction first) - a build machine with vim built but never deployed
+# to this particular device must still get kilo's own vi/edit.
 push_kilo_wrapper()
 {
   if [ ! -f "${DIST_DIR}/kilo" ]; then
@@ -94,8 +104,24 @@ push_kilo_wrapper()
     return
   fi
 
+  local vim_check
+  vim_check="$(ssh_exec "[ -f ${INSTALL_PREFIX}/bin/vim.bin ] && echo yes" 2>&1 | tr -d '\r')"
+
+  if [ "$vim_check" = "yes" ]; then
+    log "skipping vi/edit wrapper: vim is deployed on this device (install_vim.sh owns vi/edit here)"
+    return
+  fi
+
   install_binary_ssh "kilo" "${REPO_ROOT}/runtime/kilo.sh" "vi"
   install_binary_ssh "kilo" "${REPO_ROOT}/runtime/kilo.sh" "edit"
+}
+
+# SSH counterpart of install_tools.sh's push_update_script() - refreshes
+# runtime/update_from_github.sh on a device that already has SSH working,
+# same as install_tools.sh does over ADB for a first-time install.
+push_update_script()
+{
+  install_binary_ssh "update-from-github" "${REPO_ROOT}/runtime/update_from_github.sh" "update-from-github"
 }
 
 # The compressed-on-demand tier, over SSH - the "update" counterpart to
@@ -178,6 +204,7 @@ main()
   done
 
   push_kilo_wrapper
+  push_update_script
   update_on_demand
 
   log "update complete for ${DEVICE_IP}:${SSH_PORT}"

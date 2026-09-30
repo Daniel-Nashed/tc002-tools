@@ -168,6 +168,12 @@ require_device()
 #                                                        compressed-on-demand, since it owns
 #                                                        vi/edit and those need to start instantly;
 #                                                        see install_vim.sh
+# update-from-github                                    persistent - a small checked-in script,
+#                                                        not a compiled binary; the on-device
+#                                                        counterpart of ../pull-release.sh, pulls a
+#                                                        newer release of this project's own core
+#                                                        tools straight from GitHub - see
+#                                                        runtime/update_from_github.sh
 #
 # tc002-discover is deliberately absent - not managed by this table at
 # all; it never touches the device (see its own README). No tool is
@@ -186,6 +192,9 @@ deployment_mode_for()
       echo "compressed-on-demand"
       ;;
     awtrix_autostart)
+      echo "persistent"
+      ;;
+    update-from-github)
       echo "persistent"
       ;;
     *)

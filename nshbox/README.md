@@ -63,6 +63,7 @@ can also be left out of a build entirely (`make CHECKSUMS=0`, see "Build").
 | `nshbox dig [--json\|--JSON] <name> [A\|CNAME\|MX\|TXT\|PTR]` / `dig -x <ip>` | no | DNS lookup, `dig`-style simplified ANSWER SECTION output (or a JSON array, compact or pretty); `-x` = reverse lookup, IP to name - see below. |
 | `nshbox nslookup [--json\|--JSON] [-type=A\|CNAME\|MX\|TXT\|PTR] <name\|ip>` | no | DNS lookup, `nslookup`-style output (or a JSON array, compact or pretty); an IP address is looked up in reverse - see below. |
 | `nshbox netcat\|nc <host> <port>` / `-l <port>` / `-U <path>` / `-l -U <path>` | no | Connect or listen-once, TCP or a UNIX socket, relay stdin/stdout - see below. |
+| `nshbox wget <url> [-o file \| -O [file\|-]] [-L n] [-q\|-s] [-k\|--insecure] [--sha{1,256,384,512}\|--hash [hex]]` | no | Purpose-built HTTPS(/HTTP)-GET client, not a general curl/wget replacement - see below. |
 | `nshbox install [-f] [-q]` | **yes** | Create BusyBox-style applet symlinks - see below. |
 
 Four commands mutate device state: `install` (creates symlinks in its own directory), `tee` (writes files when
@@ -525,6 +526,70 @@ once the one connection has been accepted (a path removal does not affect an alr
 Host resolution (`nc host port`) goes through `getaddrinfo()`, the same call `hostname -f` above already uses -
 handles a plain IP address or a real hostname, IPv4 or IPv6, uniformly, trying each result in turn until one
 actually connects.
+
+## wget
+
+```sh
+nshbox wget https://example.com/file.tar.gz                       # saves as file.tar.gz (derived from the URL)
+nshbox wget https://example.com/file.tar.gz -o out.tar.gz         # explicit output name
+nshbox wget https://example.com/file.tar.gz -O                    # same as the bare form above, spelled explicitly
+nshbox wget https://example.com/file.tar.gz -O -                  # stream to stdout
+nshbox wget https://example.com/file.tar.gz --sha256 <hex>        # verify while downloading; deleted on mismatch
+nshbox wget https://example.com/file.tar.gz --hash <hex>          # same, algorithm auto-detected from hex length
+nshbox wget https://example.com/file.tar.gz --sha256              # no <hex>: just compute and print it, don't verify
+nshbox wget https://example.com/file.tar.gz --hash                # same, bare --hash defaults to SHA-256
+nshbox wget https://self-signed.example.com/ -k                   # skip certificate verification
+```
+
+Purpose-built - HTTPS(/HTTP) GET only, nothing else - **not a claim of compatibility with real wget or curl**, and
+deliberately not a general replacement for either: no FTP/proxies/auth schemes/cookies/multipart/recursion, which
+is exactly the bulk that makes curl the size it is (see `../whoami/README.md` for the size comparison this project
+already ran on the same static-musl toolchain). Written to answer one need: fetching a release asset (a binary,
+signed archive, ...) from somewhere like a GitHub release, verifying it before trusting it, without needing curl
+on the device at all - see `../docs/device_layout.md` for how this fits into the project's own on-demand-fetch
+design.
+
+Follows GNU wget's own real conventions where they exist, curl's where wget has none, and accepts recognized
+aliases from **both** rather than forcing one spelling:
+
+- **Output**: `-o file` / `-O file` (wget's and curl's own explicit-filename flags - true synonyms, both accepted).
+  Bare `-O` (no filename following) derives the name from the URL's own basename, stripped of any query string -
+  curl's own `--remote-name` behavior, reached via curl's actual short flag for it. `-O -` streams to stdout -
+  real wget's own established idiom for that, not a new one. Falls back to a fixed name if the URL has nothing to
+  derive one from (a bare domain, or a path ending in `/`), same as real wget does.
+- **Redirects**: on by default, capped at 20 (`-L n` / `-L<n>` / `--max-redirs n` / `--max-redirect=n` to change
+  it) - matching wget's own default-on behavior (curl's `-L` is opt-in; this isn't), with curl's flag name and
+  curl's separate max-redirs-style cap folded into one option. `-L 0` disables following entirely, same meaning as
+  curl's own `--max-redirs 0`. Certificate verification (below) applies fresh to every hop, not just the first
+  connection - each redirect is a new TLS connection to a, in general, different host.
+- **Certificate verification**: on by default, checked against this project's own CA trust bundle (the same file
+  curl/nginx already use on the device, staged by `install_etc.sh` - see `../docs/device_layout.md`), not a
+  second trust store. `--no-check-certificate` (wget's real flag), `-k`, and `--insecure` (curl's) all disable it
+  - true aliases, not three different behaviors.
+- **Checksum verification**: `--sha256`/`--sha1`/`--sha384`/`--sha512`/`--md5 <hex>` for an explicit algorithm, or
+  `--hash <hex>` to auto-detect it from the hex string's own length (32/40/64/96/128 characters -> md5/sha1/
+  sha256/sha384/sha512 - these never collide). Reuses the exact same hash implementation the checksum commands
+  above already use, hashed in the same pass as the download itself (not a second read afterward) - on mismatch,
+  the partially-trusted file is deleted, not left on disk for something to run by accident. The `<hex>` argument
+  is optional on every one of these flags: given, it verifies; left off, it just computes and prints the
+  checksum (`<hex>  <name>`, the same format `sha256sum` etc. already use) with no pass/fail judgment at all -
+  unlike the verify-mismatch case, this output is never suppressed by `-q`/`-s`, since it *is* what was asked
+  for. Telling the two apart is unambiguous: the next token is only ever consumed as the expected value if it is
+  actually shaped like a valid checksum for that flag (right length, all hex digits) - anything else (another
+  flag, or nothing at all) leaves the flag bare. Bare `--hash` specifically has nothing to detect an algorithm
+  from, so it defaults to SHA-256.
+- **Quiet**: `-q`/`--quiet` (wget's own flag) and `-s`/`--silent` (curl's) all suppress the same three
+  informational lines (redirect notices, "checksum OK", "saved ..."), never the ones that report a real failure -
+  same "routine output off, real signal stays" philosophy `nshbox install -q` already uses.
+
+Relative redirects (`/path`, `//host/path`, and a plain `path` merged onto the current URL's own directory - RFC
+3986 section 5's practical cases) are resolved, not just rejected - confirmed directly, 2026-09-30, against a
+real device's own web UI redirecting with a plain relative path. `.`/`..` dot-segment normalization is not
+implemented (no real target sends one; passed through as-is, which most servers normalize themselves anyway).
+
+Not implemented: chunked `Transfer-Encoding` (every response this is actually built for - GitHub release assets,
+served from S3-backed storage - sends a real `Content-Length`; add chunked support if a real target ever needs
+it), HTTP/2.
 
 ## base64 and jwt
 

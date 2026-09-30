@@ -113,6 +113,12 @@
 #include <mbedtls/sha1.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/sha512.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/net_sockets.h>
+#include <mbedtls/x509_crt.h>
+#include <mbedtls/error.h>
 #endif
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
@@ -7744,6 +7750,903 @@ static int cmd_md5sum(int argc, char **argv)
     return hash_main(argc, argv, HASH_MD5, "md5");
 }
 
+/* ------------------------------------------------------------------ */
+/* wget - HTTPS GET with cert verification and checksum verification  */
+/* ------------------------------------------------------------------ */
+
+/* Purpose-built, HTTPS-GET-only - no FTP/proxies/auth schemes/cookies/
+ * multipart, unlike curl, which is what makes curl the size it is. Reuses
+ * hash_ctx_t (above) for --sha256/--hash verification, and the same
+ * getaddrinfo()-then-try-each-result TCP connect pattern
+ * netcat_connect_tcp() already uses (see cmd_netcat). Follows GNU wget's
+ * own real conventions where they exist (redirects followed by default,
+ * capped - not opt-in like curl's -L; -O <file> is the explicit output
+ * name), curl's where wget has none (--sha256 has no wget equivalent at
+ * all, and curl's own bare -O/--remote-name derives the filename from the
+ * URL, which wget's -O does not), and accepts recognized aliases from
+ * both rather than forcing one spelling - see nshbox/README.md.
+ */
+
+typedef struct {
+    char scheme[8];    /* "http" or "https" */
+    char host[256];
+    char port[8];
+    char path[1024];   /* includes any query string, as sent on the wire */
+} wget_url_t;
+
+/* scheme://host[:port][/path[?query]] - only http/https; path defaults
+ * to "/" if absent. This project's actual use case (GitHub release
+ * redirects) always sends an absolute Location header, so that is the
+ * common case here; a relative one is still resolved (protocol-relative,
+ * absolute-path, or relative-path-merge - see wget_resolve_location()
+ * below), just without dot-segment ("."/"..") normalization. */
+static int wget_parse_url(const char *url, wget_url_t *u)
+{
+    const char *p;
+    const char *host_start, *host_end, *path_start, *colon;
+    size_t host_len;
+
+    memset(u, 0, sizeof(*u));
+
+    if (!strncmp(url, "https://", 8)) {
+        strcpy(u->scheme, "https");
+        strcpy(u->port, "443");
+        p = url + 8;
+    } else if (!strncmp(url, "http://", 7)) {
+        strcpy(u->scheme, "http");
+        strcpy(u->port, "80");
+        p = url + 7;
+    } else {
+        fprintf(stderr, "wget: %s: only http:// and https:// are supported\n", url);
+        return -1;
+    }
+
+    if (*p == '\0') {
+        fprintf(stderr, "wget: %s: no host\n", url);
+        return -1;
+    }
+
+    host_start = p;
+    path_start = strchr(p, '/');
+    host_end = path_start ? path_start : (p + strlen(p));
+
+    colon = memchr(host_start, ':', (size_t)(host_end - host_start));
+
+    if (colon) {
+        size_t port_len = (size_t)(host_end - colon - 1);
+
+        if (port_len == 0 || port_len >= sizeof(u->port)) {
+            fprintf(stderr, "wget: %s: invalid port\n", url);
+            return -1;
+        }
+
+        memcpy(u->port, colon + 1, port_len);
+        u->port[port_len] = '\0';
+        host_len = (size_t)(colon - host_start);
+    } else {
+        host_len = (size_t)(host_end - host_start);
+    }
+
+    if (host_len == 0 || host_len >= sizeof(u->host)) {
+        fprintf(stderr, "wget: %s: invalid host\n", url);
+        return -1;
+    }
+
+    memcpy(u->host, host_start, host_len);
+    u->host[host_len] = '\0';
+
+    if (path_start) {
+        if (strlen(path_start) >= sizeof(u->path)) {
+            fprintf(stderr, "wget: %s: path too long\n", url);
+            return -1;
+        }
+
+        strcpy(u->path, path_start);
+    } else {
+        strcpy(u->path, "/");
+    }
+
+    return 0;
+}
+
+/* Same getaddrinfo()-then-try-each-result pattern as netcat_connect_tcp()
+ * (see cmd_netcat) - handles a hostname or numeric address, IPv4 or IPv6,
+ * uniformly, and does not just trust the first result blindly. */
+static int wget_tcp_connect(const char *host, const char *port)
+{
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *rp;
+    int sock = -1;
+    int r;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    r = getaddrinfo(host, port, &hints, &res);
+
+    if (r != 0) {
+        fprintf(stderr, "wget: %s: %s\n", host, gai_strerror(r));
+        return -1;
+    }
+
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+
+        if (sock < 0)
+            continue;
+
+        if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0)
+            break;
+
+        close(sock);
+        sock = -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (sock < 0) {
+        fprintf(stderr, "wget: could not connect to %s:%s: %s\n", host, port, strerror(errno));
+        return -1;
+    }
+
+    return sock;
+}
+
+typedef struct {
+    int fd;
+    int use_tls;
+    mbedtls_net_context net;
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_x509_crt cacert;
+    mbedtls_ssl_config conf;
+    mbedtls_ssl_context ssl;
+} wget_conn_t;
+
+static void wget_conn_init(wget_conn_t *c)
+{
+    memset(c, 0, sizeof(*c));
+    c->fd = -1;
+    mbedtls_net_init(&c->net);
+    mbedtls_entropy_init(&c->entropy);
+    mbedtls_ctr_drbg_init(&c->ctr_drbg);
+    mbedtls_x509_crt_init(&c->cacert);
+    mbedtls_ssl_config_init(&c->conf);
+    mbedtls_ssl_init(&c->ssl);
+}
+
+static void wget_conn_close(wget_conn_t *c)
+{
+    if (c->use_tls)
+        mbedtls_ssl_close_notify(&c->ssl);
+
+    if (c->fd >= 0)
+        close(c->fd);
+
+    mbedtls_ssl_free(&c->ssl);
+    mbedtls_ssl_config_free(&c->conf);
+    mbedtls_x509_crt_free(&c->cacert);
+    mbedtls_ctr_drbg_free(&c->ctr_drbg);
+    mbedtls_entropy_free(&c->entropy);
+
+    c->fd = -1;
+    c->use_tls = 0;
+}
+
+/* The project's own CA trust bundle - the same file curl/nginx already
+ * use on this device (staged by install_etc.sh, applied by setup_etc.sh
+ * - see docs/device_layout.md), not a second, separately-maintained trust
+ * store. Missing entirely is only fatal when verification is actually
+ * required; --no-check-certificate never even calls this. */
+#define WGET_CA_BUNDLE "/etc/ssl/certs/ca-certificates.crt"
+
+static int wget_connect_and_handshake(wget_conn_t *c, const wget_url_t *u, int insecure)
+{
+    int rc;
+
+    c->fd = wget_tcp_connect(u->host, u->port);
+
+    if (c->fd < 0)
+        return -1;
+
+    if (strcmp(u->scheme, "http") == 0) {
+        c->use_tls = 0;
+        return 0;
+    }
+
+    c->use_tls = 1;
+    c->net.fd = c->fd;
+
+    rc = mbedtls_ctr_drbg_seed(&c->ctr_drbg, mbedtls_entropy_func, &c->entropy,
+                                (const unsigned char *)"nshbox_wget", 11);
+    if (rc != 0) {
+        fprintf(stderr, "wget: TLS init failed (ctr_drbg_seed, -0x%04x)\n", -rc);
+        return -1;
+    }
+
+    if (!insecure) {
+        rc = mbedtls_x509_crt_parse_file(&c->cacert, WGET_CA_BUNDLE);
+
+        if (rc != 0) {
+            fprintf(stderr,
+                "wget: could not load %s (run install/install_etc.sh, or pass "
+                "--no-check-certificate/-k/--insecure to skip verification)\n",
+                WGET_CA_BUNDLE);
+            return -1;
+        }
+    }
+
+    rc = mbedtls_ssl_config_defaults(&c->conf, MBEDTLS_SSL_IS_CLIENT,
+                                      MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
+    if (rc != 0) {
+        fprintf(stderr, "wget: TLS init failed (ssl_config_defaults, -0x%04x)\n", -rc);
+        return -1;
+    }
+
+    mbedtls_ssl_conf_rng(&c->conf, mbedtls_ctr_drbg_random, &c->ctr_drbg);
+
+    if (insecure) {
+        mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_NONE);
+    } else {
+        mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+        mbedtls_ssl_conf_ca_chain(&c->conf, &c->cacert, NULL);
+    }
+
+    rc = mbedtls_ssl_setup(&c->ssl, &c->conf);
+    if (rc != 0) {
+        fprintf(stderr, "wget: TLS init failed (ssl_setup, -0x%04x)\n", -rc);
+        return -1;
+    }
+
+    /* Sets BOTH the SNI extension and the name mbedTLS checks the
+     * server's certificate against - without this, VERIFY_REQUIRED still
+     * checks the chain is trusted, but never checks it was actually
+     * issued for the host we asked for. Called fresh per-hop: every
+     * redirect runs this whole function again with THAT hop's own host,
+     * never the original URL's - see cmd_wget()'s redirect loop. */
+    rc = mbedtls_ssl_set_hostname(&c->ssl, u->host);
+    if (rc != 0) {
+        fprintf(stderr, "wget: TLS init failed (set_hostname, -0x%04x)\n", -rc);
+        return -1;
+    }
+
+    mbedtls_ssl_set_bio(&c->ssl, &c->net, mbedtls_net_send, mbedtls_net_recv, NULL);
+
+    do {
+        rc = mbedtls_ssl_handshake(&c->ssl);
+    } while (rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE);
+
+    if (rc != 0) {
+        char errbuf[128];
+        mbedtls_strerror(rc, errbuf, sizeof(errbuf));
+        fprintf(stderr, "wget: %s: TLS handshake failed: %s\n", u->host, errbuf);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int wget_conn_read(wget_conn_t *c, unsigned char *buf, size_t len)
+{
+    int n;
+
+    if (c->use_tls) {
+        do {
+            n = mbedtls_ssl_read(&c->ssl, buf, len);
+        } while (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE);
+
+        if (n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
+            return 0;
+
+        return n;
+    }
+
+    return (int)read(c->fd, buf, len);
+}
+
+static int wget_conn_write_all(wget_conn_t *c, const void *buf, size_t len)
+{
+    const unsigned char *p = buf;
+    size_t remaining = len;
+
+    while (remaining > 0) {
+        int n;
+
+        if (c->use_tls) {
+            n = mbedtls_ssl_write(&c->ssl, p, remaining);
+
+            if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE)
+                continue;
+        } else {
+            n = (int)write(c->fd, p, remaining);
+        }
+
+        if (n <= 0)
+            return -1;
+
+        p += n;
+        remaining -= (size_t)n;
+    }
+
+    return 0;
+}
+
+/* One line, up to (and not including) the trailing "\r\n", NUL-terminated
+ * into buf (cap includes the NUL). Byte-at-a-time - headers are a few KB
+ * at most, simplicity over micro-optimizing a control-plane read (same
+ * trade-off this file already makes elsewhere for small text reads).
+ * Returns the line length, 0 for a bare blank line (the headers/body
+ * boundary), or -1 on error/EOF before a newline. */
+static int wget_read_line(wget_conn_t *c, char *buf, size_t cap)
+{
+    size_t n = 0;
+    unsigned char ch;
+
+    for (;;) {
+        int r = wget_conn_read(c, &ch, 1);
+
+        if (r <= 0)
+            return -1;
+
+        if (ch == '\n') {
+            if (n > 0 && buf[n - 1] == '\r')
+                n--;
+
+            buf[n] = '\0';
+            return (int)n;
+        }
+
+        if (n + 1 < cap)
+            buf[n++] = (char)ch;
+    }
+}
+
+#define WGET_LINE_MAX 4096
+
+typedef struct {
+    int status;
+    char location[2048];
+    long content_length;   /* -1 = not given (read until close) */
+} wget_response_t;
+
+/* Sends "GET <path> HTTP/1.1", a Host header, and Connection: close (so
+ * the server ends the stream itself - no keep-alive/pipelining to manage
+ * here), then reads the status line and headers, capturing only what
+ * this needs: the status code, Location (redirects), Content-Length.
+ * Anything else is read and discarded. Not implemented: chunked
+ * Transfer-Encoding - every response this is actually built for (GitHub
+ * release assets, served from S3-backed storage) sends a real
+ * Content-Length; add chunked support if a real target ever needs it. */
+static int wget_request(wget_conn_t *c, const wget_url_t *u, wget_response_t *resp)
+{
+    char line[WGET_LINE_MAX];
+    char req[WGET_LINE_MAX];
+    int n;
+
+    memset(resp, 0, sizeof(*resp));
+    resp->content_length = -1;
+
+    n = snprintf(req, sizeof(req),
+                 "GET %s HTTP/1.1\r\n"
+                 "Host: %s\r\n"
+                 "User-Agent: nshbox-wget/1.0\r\n"
+                 "Connection: close\r\n"
+                 "\r\n",
+                 u->path, u->host);
+
+    if (n < 0 || (size_t)n >= sizeof(req)) {
+        fprintf(stderr, "wget: request too long\n");
+        return -1;
+    }
+
+    if (wget_conn_write_all(c, req, (size_t)n) != 0) {
+        fprintf(stderr, "wget: %s: write failed: %s\n", u->host, strerror(errno));
+        return -1;
+    }
+
+    if (wget_read_line(c, line, sizeof(line)) < 0) {
+        fprintf(stderr, "wget: %s: no response\n", u->host);
+        return -1;
+    }
+
+    /* "HTTP/1.1 200 OK" (or 1.0) - the status code is always the second
+     * space-separated field regardless of the reason phrase's wording. */
+    {
+        const char *sp = strchr(line, ' ');
+
+        if (!sp || strncmp(line, "HTTP/", 5) != 0) {
+            fprintf(stderr, "wget: %s: not an HTTP response: %s\n", u->host, line);
+            return -1;
+        }
+
+        resp->status = atoi(sp + 1);
+    }
+
+    for (;;) {
+        int len = wget_read_line(c, line, sizeof(line));
+
+        if (len < 0) {
+            fprintf(stderr, "wget: %s: connection closed while reading headers\n", u->host);
+            return -1;
+        }
+
+        if (len == 0)
+            break;
+
+        if (!strncasecmp(line, "Location:", 9)) {
+            const char *v = line + 9;
+
+            while (*v == ' ' || *v == '\t')
+                v++;
+
+            snprintf(resp->location, sizeof(resp->location), "%s", v);
+        } else if (!strncasecmp(line, "Content-Length:", 15)) {
+            const char *v = line + 15;
+
+            while (*v == ' ' || *v == '\t')
+                v++;
+
+            resp->content_length = atol(v);
+        }
+    }
+
+    return 0;
+}
+
+/* Strips any query string before deriving a local filename from a URL
+ * path's last "/"-separated segment - GitHub's own redirected asset URLs
+ * (objects.githubusercontent.com/...) always carry a long signed query
+ * string that must never end up as part of the saved filename. Falls
+ * back to a fixed name, same as real wget does for a directory-style URL
+ * with nothing to derive a name from. */
+static void wget_derive_filename(const wget_url_t *u, char *out, size_t cap)
+{
+    const char *slash = strrchr(u->path, '/');
+    const char *name = slash ? slash + 1 : u->path;
+    const char *qmark = strchr(name, '?');
+    size_t len = qmark ? (size_t)(qmark - name) : strlen(name);
+
+    if (len == 0 || len >= cap) {
+        snprintf(out, cap, "index.html");
+        return;
+    }
+
+    memcpy(out, name, len);
+    out[len] = '\0';
+}
+
+typedef struct {
+    hash_algo_t algo;
+    int active;     /* compute a checksum at all (either mode below) */
+    int verify;     /* 1: compare against expected, fail+delete on mismatch.
+                        0: calculate-only - just print it, sha256sum-style. */
+    char expected[2 * HASH_MAX_DIGEST + 1];
+} wget_checksum_t;
+
+/* --hash: the length of the hex string alone is enough to identify which
+ * of the five algorithms nshbox already implements was meant - their
+ * digest lengths never collide (16/20/32/48/64 bytes -> 32/40/64/96/128
+ * hex characters). Anything else is a clear input error, not a guess. */
+static int wget_hash_algo_from_length(size_t hexlen, hash_algo_t *out)
+{
+    switch (hexlen) {
+    case 32:  *out = HASH_MD5;    return 0;
+    case 40:  *out = HASH_SHA1;   return 0;
+    case 64:  *out = HASH_SHA256; return 0;
+    case 96:  *out = HASH_SHA384; return 0;
+    case 128: *out = HASH_SHA512; return 0;
+    default:  return -1;
+    }
+}
+
+/* True if s is exactly len characters, all hex digits - used to tell a
+ * real expected-checksum argument apart from "no argument given" (the
+ * next token is another flag, or just isn't shaped like a digest at all)
+ * for every --sha{1,256,384,512}/--md5/--hash flag below, all of which take
+ * an OPTIONAL value: with one, verify against it; bare, just compute and print it
+ * (calculate-only mode - see wget_checksum_t's own comment). Safe to peek
+ * this way because nothing else in this grammar is a free-form positional
+ * that could ever collide with a hex-shaped token. */
+static int wget_is_hex(const char *s, size_t len)
+{
+    size_t i;
+
+    if (strlen(s) != len)
+        return 0;
+
+    for (i = 0; i < len; i++) {
+        if (!isxdigit((unsigned char)s[i]))
+            return 0;
+    }
+
+    return 1;
+}
+
+/* Reads the body (Content-Length bytes if given, otherwise until the
+ * connection closes) as a pure byte stream - no line/text handling of
+ * any kind past the header boundary wget_request() already consumed.
+ * Writes it to out (NULL means discard, used for a redirect/error
+ * response body nobody asked to keep), and feeds the same bytes into the
+ * checksum context in the same pass if one was requested - one read of
+ * the wire, not a download then a separate re-read to verify. */
+static int wget_copy_body(wget_conn_t *c, const wget_response_t *resp, FILE *out,
+                          wget_checksum_t *ck, hash_ctx_t *hctx)
+{
+    unsigned char buf[65536];
+    long remaining = resp->content_length;
+    int use_length = (remaining >= 0);
+
+    while (!use_length || remaining > 0) {
+        size_t want = sizeof(buf);
+        int n;
+
+        if (use_length && (long)want > remaining)
+            want = (size_t)remaining;
+
+        n = wget_conn_read(c, buf, want);
+
+        if (n < 0) {
+            fprintf(stderr, "wget: read failed: %s\n", strerror(errno));
+            return -1;
+        }
+
+        if (n == 0)
+            break;
+
+        if (out && fwrite(buf, 1, (size_t)n, out) != (size_t)n) {
+            perror("wget");
+            return -1;
+        }
+
+        if (ck && ck->active)
+            hash_update(hctx, buf, (size_t)n);
+
+        if (use_length)
+            remaining -= n;
+    }
+
+    if (use_length && remaining > 0) {
+        fprintf(stderr, "wget: connection closed early (%ld byte(s) short)\n", remaining);
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Resolves a Location header against the URL it was received from - RFC
+ * 3986 section 5's practical cases, in the order it checks them itself.
+ * Callers already handle the fully-absolute "scheme://..." case before
+ * reaching this function, so it only sees the three relative forms:
+ *
+ *   "//host/path"  - protocol-relative: base's own scheme, everything
+ *                    else from the reference.
+ *   "/path"        - absolute-path: base's scheme+host+port, this path.
+ *   "path"         - relative-path (RFC 3986 5.3's "merge"): appended to
+ *                    the base URL's own path up to (and including) its
+ *                    last "/", i.e. resolved against the current
+ *                    "directory", not its root - real servers send this
+ *                    for a same-directory redirect (confirmed directly,
+ *                    2026-09-30, against a real device's own web UI).
+ *
+ * NOT implemented: "."/".." dot-segment normalization (RFC 3986 5.2.4) -
+ * no real target this has been used against sends one; a path containing
+ * "../" is passed through as-is, which most real HTTP servers normalize
+ * server-side anyway. */
+static int wget_resolve_location(const wget_url_t *base, const char *location, char *out, size_t cap)
+{
+    int n;
+
+    if (!strncmp(location, "//", 2)) {
+        n = snprintf(out, cap, "%s:%s", base->scheme, location);
+    } else if (location[0] == '/') {
+        n = snprintf(out, cap, "%s://%s:%s%s", base->scheme, base->host, base->port, location);
+    } else {
+        const char *slash = strrchr(base->path, '/');
+        size_t dir_len = slash ? (size_t)(slash - base->path + 1) : 0;
+
+        n = snprintf(out, cap, "%s://%s:%s%.*s%s", base->scheme, base->host, base->port,
+                     (int)dir_len, base->path, location);
+    }
+
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+}
+
+static int cmd_wget(int argc, char **argv)
+{
+    wget_url_t u;
+    char cur_url[2048];
+    char out_name[1024];
+    int explicit_name = 0;
+    int to_stdout = 0;
+    int max_redirects = 20;
+    int insecure = 0;
+    int quiet = 0;
+    wget_checksum_t ck;
+    int i;
+
+    memset(&ck, 0, sizeof(ck));
+    out_name[0] = '\0';
+
+    if (argc < 2) {
+        fprintf(stderr,
+            "Usage: nshbox wget <url> [-o file | -O [file|-]] [-L n] [-q|-s] "
+            "[-k|--insecure] [--sha{1,256,384,512}|--hash [hex]]\n");
+        return 2;
+    }
+
+    if (strlen(argv[1]) >= sizeof(cur_url)) {
+        fprintf(stderr, "wget: URL too long\n");
+        return 1;
+    }
+
+    strcpy(cur_url, argv[1]);
+
+    for (i = 2; i < argc; i++) {
+        const char *a = argv[i];
+
+        if (!strcmp(a, "-o") || !strcmp(a, "-O")) {
+            int is_dash_o_upper = (a[1] == 'O');
+
+            /* "-" checked first, deliberately: it also starts with '-',
+               so it must be matched before the generic "does the next
+               token look like another flag" check below, or it would
+               never be reached. */
+            if (i + 1 < argc && !strcmp(argv[i + 1], "-")) {
+                i++;
+                to_stdout = 1;
+            } else if (i + 1 < argc && argv[i + 1][0] != '-') {
+                i++;
+                snprintf(out_name, sizeof(out_name), "%s", argv[i]);
+                explicit_name = 1;
+            } else if (is_dash_o_upper) {
+                /* Bare -O: derive the name from the URL once it is known
+                   below (curl's own --remote-name behavior). */
+                explicit_name = 0;
+                out_name[0] = '\0';
+            } else {
+                fprintf(stderr, "wget: -o needs a filename\n");
+                return 2;
+            }
+        } else if (!strncmp(a, "-L", 2) && a[2] != '\0' && isdigit((unsigned char)a[2])) {
+            max_redirects = atoi(a + 2);
+        } else if (!strcmp(a, "-L")) {
+            if (i + 1 >= argc || !isdigit((unsigned char)argv[i + 1][0])) {
+                fprintf(stderr, "wget: -L needs a number\n");
+                return 2;
+            }
+
+            max_redirects = atoi(argv[++i]);
+        } else if (!strncmp(a, "--max-redirs=", 13)) {
+            max_redirects = atoi(a + 13);
+        } else if (!strcmp(a, "--max-redirs")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "wget: --max-redirs needs a number\n");
+                return 2;
+            }
+
+            max_redirects = atoi(argv[++i]);
+        } else if (!strncmp(a, "--max-redirect=", 15)) {
+            max_redirects = atoi(a + 15);
+        } else if (!strcmp(a, "--no-check-certificate") || !strcmp(a, "-k") || !strcmp(a, "--insecure")) {
+            insecure = 1;
+        } else if (!strcmp(a, "-q") || !strcmp(a, "--quiet") || !strcmp(a, "-s") || !strcmp(a, "--silent")) {
+            quiet = 1;
+        } else if (!strcmp(a, "--hash")) {
+            ck.active = 1;
+
+            if (i + 1 >= argc || argv[i + 1][0] == '-') {
+                /* Bare: nothing follows (or the next token is another
+                   flag) - nothing to detect the algorithm from, so
+                   default to SHA-256, the most commonly expected default
+                   today. */
+                ck.algo = HASH_SHA256;
+                ck.verify = 0;
+            } else {
+                size_t hexlen = strlen(argv[i + 1]);
+
+                if (wget_hash_algo_from_length(hexlen, &ck.algo) != 0 || !wget_is_hex(argv[i + 1], hexlen)) {
+                    fprintf(stderr,
+                        "wget: --hash: '%s' does not look like a valid checksum "
+                        "(expected 32/40/64/96/128 hex characters = md5/sha1/sha256/sha384/sha512)\n",
+                        argv[i + 1]);
+                    return 2;
+                }
+
+                i++;
+                snprintf(ck.expected, sizeof(ck.expected), "%s", argv[i]);
+                ck.verify = 1;
+            }
+        } else if (!strcmp(a, "--sha256") || !strcmp(a, "--sha1") ||
+                   !strcmp(a, "--sha384") || !strcmp(a, "--sha512") || !strcmp(a, "--md5")) {
+            size_t want_len;
+
+            if (!strcmp(a, "--sha256"))      { ck.algo = HASH_SHA256; want_len = 64; }
+            else if (!strcmp(a, "--sha1"))   { ck.algo = HASH_SHA1;   want_len = 40; }
+            else if (!strcmp(a, "--sha384")) { ck.algo = HASH_SHA384; want_len = 96; }
+            else if (!strcmp(a, "--sha512")) { ck.algo = HASH_SHA512; want_len = 128; }
+            else                             { ck.algo = HASH_MD5;    want_len = 32; }
+
+            ck.active = 1;
+
+            if (i + 1 >= argc || argv[i + 1][0] == '-') {
+                /* Bare: nothing follows, or the next token is another
+                   flag - calculate-only, no argument consumed. */
+                ck.verify = 0;
+            } else if (wget_is_hex(argv[i + 1], want_len)) {
+                i++;
+                snprintf(ck.expected, sizeof(ck.expected), "%s", argv[i]);
+                ck.verify = 1;
+            } else {
+                /* Clearly meant as this flag's value (does not start with
+                   "-"), but the wrong shape for this specific algorithm -
+                   a real error, not silently left for the next loop
+                   iteration to choke on as an unrelated "unknown
+                   argument". */
+                fprintf(stderr, "wget: %s: '%s' is not a valid %zu-character hex checksum\n",
+                        a, argv[i + 1], want_len);
+                return 2;
+            }
+        } else {
+            fprintf(stderr, "wget: unknown argument: %s\n", a);
+            return 2;
+        }
+    }
+
+    if (to_stdout && explicit_name) {
+        fprintf(stderr, "wget: cannot combine an output filename with streaming to stdout\n");
+        return 2;
+    }
+
+    if (wget_parse_url(cur_url, &u) != 0)
+        return 1;
+
+    for (;;) {
+        wget_conn_t conn;
+        wget_response_t resp;
+        int rc;
+
+        wget_conn_init(&conn);
+        rc = wget_connect_and_handshake(&conn, &u, insecure);
+
+        if (rc != 0) {
+            wget_conn_close(&conn);
+            return 1;
+        }
+
+        rc = wget_request(&conn, &u, &resp);
+
+        if (rc != 0) {
+            wget_conn_close(&conn);
+            return 1;
+        }
+
+        if (resp.status >= 300 && resp.status < 400 && resp.location[0] != '\0' && max_redirects > 0) {
+            if (!quiet)
+                fprintf(stderr, "wget: %d redirect -> %s\n", resp.status, resp.location);
+
+            /* Body of a redirect response is discarded, not saved - this
+               is not the final answer. */
+            wget_copy_body(&conn, &resp, NULL, NULL, NULL);
+            wget_conn_close(&conn);
+
+            if (!strncmp(resp.location, "http://", 7) || !strncmp(resp.location, "https://", 8)) {
+                if (strlen(resp.location) >= sizeof(cur_url)) {
+                    fprintf(stderr, "wget: redirect target too long\n");
+                    return 1;
+                }
+
+                strcpy(cur_url, resp.location);
+            } else if (wget_resolve_location(&u, resp.location, cur_url, sizeof(cur_url)) != 0) {
+                fprintf(stderr, "wget: %s: redirect target too long or invalid\n", resp.location);
+                return 1;
+            }
+
+            if (wget_parse_url(cur_url, &u) != 0)
+                return 1;
+
+            max_redirects--;
+            continue;
+        }
+
+        if (resp.status < 200 || resp.status >= 300) {
+            fprintf(stderr, "wget: %s: server returned HTTP %d\n", u.host, resp.status);
+            wget_copy_body(&conn, &resp, NULL, NULL, NULL);
+            wget_conn_close(&conn);
+            return 1;
+        }
+
+        /* Final, successful response - figure out where it goes, then
+           stream it there, hashing in the same pass if requested. */
+        {
+            FILE *out = stdout;
+            hash_ctx_t hctx;
+            int body_rc;
+
+            if (!to_stdout) {
+                if (!explicit_name)
+                    wget_derive_filename(&u, out_name, sizeof(out_name));
+
+                out = fopen(out_name, "wb");
+
+                if (!out) {
+                    perror(out_name);
+                    wget_conn_close(&conn);
+                    return 1;
+                }
+            }
+
+            if (ck.active && hash_start(&hctx, ck.algo) != 0) {
+                fprintf(stderr, "wget: hash init failed\n");
+
+                if (out != stdout)
+                    fclose(out);
+
+                wget_conn_close(&conn);
+                return 1;
+            }
+
+            body_rc = wget_copy_body(&conn, &resp, out, &ck, &hctx);
+
+            if (out != stdout)
+                fclose(out);
+
+            wget_conn_close(&conn);
+
+            if (body_rc != 0) {
+                if (out != stdout)
+                    unlink(out_name);
+
+                if (ck.active)
+                    hash_free(&hctx);
+
+                return 1;
+            }
+
+            if (ck.active) {
+                unsigned char digest[HASH_MAX_DIGEST];
+                char got[2 * HASH_MAX_DIGEST + 1];
+                unsigned int digest_len = hash_digest_len(ck.algo);
+                unsigned int j;
+
+                hash_finish(&hctx, digest);
+                hash_free(&hctx);
+
+                for (j = 0; j < digest_len; j++)
+                    snprintf(got + j * 2, 3, "%02x", digest[j]);
+
+                if (ck.verify) {
+                    if (strcasecmp(got, ck.expected) != 0) {
+                        fprintf(stderr, "wget: checksum mismatch: expected %s, got %s\n",
+                                ck.expected, got);
+
+                        if (out != stdout)
+                            unlink(out_name);
+
+                        return 1;
+                    }
+
+                    if (!quiet)
+                        fprintf(stderr, "wget: checksum OK (%s)\n", got);
+                } else {
+                    /* Calculate-only: this IS the requested output, not a
+                       routine status line - never suppressed by -q/-s,
+                       same as sha256sum's own output isn't. Same
+                       "<hex>  <name>" format those commands already use;
+                       "-" for stdout mirrors their own stdin convention. */
+                    printf("%s  %s\n", got, (out == stdout) ? "-" : out_name);
+                }
+            }
+
+            if (out != stdout && !quiet)
+                fprintf(stderr, "wget: saved %s\n", out_name);
+
+            return 0;
+        }
+    }
+}
+
 /*
  * No SHA3 commands here - nothing has asked for them so far.
  */
@@ -11505,6 +12408,7 @@ static const command_t commands[] = {
     { "md5sum",   cmd_md5sum,   "Print MD5 checksums [--json]" },
     { "totp",     cmd_totp,     "Generate a TOTP code (--secret [--text] | --url <uri> | --file <path>) [--algorithm/--digits/--period/--time]" },
     { "serve",    cmd_serve,    "GET /status, POST /totp over TCP and/or a UNIX socket [--listen host:port] [--unix [path]] [--unix-mode mode] [--secret name=path] [--foreground]" },
+    { "wget",     cmd_wget,     "Fetch a URL over HTTP(S) (-o/-O file, -O alone/-O - for remote-name/stdout, -L n redirects, -q/-s quiet, -k/--insecure, --sha{1,256,384,512}/--hash [hex] to verify, or bare to just print the checksum)" },
 #endif
     { "base64",   cmd_base64,   "Base64 encode/decode (-d decode, -u URL-safe alphabet, -w cols wrap, 0 = no wrap) [file]" },
     { "jwt",      cmd_jwt,      "Decode a JWT's payload (--header for header, --all for both) - no signature verification [token]" },

@@ -16,13 +16,16 @@ CFLAGS  = -Os -Wall -Wextra -ffunction-sections -fdata-sections
 LDFLAGS = -Wl,--gc-sections -lresolv
 
 # The sha256sum/sha1sum/sha384sum/sha512sum/md5sum commands use mbedTLS's
-# low-level digest functions, always linked STATICALLY (libmbedcrypto.a), so
-# the binary needs no crypto library on the device.
+# low-level digest functions (libmbedcrypto.a); wget additionally uses its
+# TLS/X.509 code (libmbedtls.a/libmbedx509.a, for the HTTPS client and CA
+# certificate verification) - all always linked STATICALLY, so the binary
+# needs no crypto/TLS library on the device.
 #
-# MBEDTLS_DIR: prefix with include/ and lib/libmbedcrypto.a - the ARM build
-# passes the mbedTLS this project builds itself (build/build_mbedtls.sh).
-# Empty (the default) uses the system's libmbedtls-dev (-lmbedcrypto), which
-# is what the native test containers has.
+# MBEDTLS_DIR: prefix with include/ and lib/{libmbedtls,libmbedx509,
+# libmbedcrypto}.a - the ARM build passes the mbedTLS this project builds
+# itself (build/build_mbedtls.sh, which already produces and installs all
+# three - see its own package_artifacts()). Empty (the default) uses the
+# system's libmbedtls-dev, which is what the native test container has.
 MBEDTLS_DIR =
 
 # CHECKSUMS=0 leaves out those five commands (-DNSHBOX_NO_CHECKSUMS), so
@@ -38,14 +41,20 @@ ifeq ($(CHECKSUMS),0)
 CFLAGS += -DNSHBOX_NO_CHECKSUMS
 else
 ifeq ($(MBEDTLS_DIR),)
-# The archive's full path (not -lmbedcrypto), so the link is static whether
-# or not the shared library is installed beside it, and STATIC=1 needs no
-# -Bdynamic juggling. Prints just the bare name if it is not installed,
-# which then fails the link with a clear "No such file" error.
-LDFLAGS := $(shell $(CC) -print-file-name=libmbedcrypto.a) $(LDFLAGS)
+# The archives' full paths (not -lmbedtls -lmbedx509 -lmbedcrypto), so the
+# link is static whether or not the shared libraries are installed beside
+# them, and STATIC=1 needs no -Bdynamic juggling. Prints just the bare name
+# if one is not installed, which then fails the link with a clear "No such
+# file" error. Order matters for a static link: libmbedtls.a depends on
+# libmbedx509.a, which depends on libmbedcrypto.a - listed in that order,
+# dependents before dependencies, same as MBEDTLS_DIR's own branch below.
+LDFLAGS := $(shell $(CC) -print-file-name=libmbedtls.a) \
+           $(shell $(CC) -print-file-name=libmbedx509.a) \
+           $(shell $(CC) -print-file-name=libmbedcrypto.a) $(LDFLAGS)
 else
 CFLAGS  += -I$(MBEDTLS_DIR)/include
-LDFLAGS := $(MBEDTLS_DIR)/lib/libmbedcrypto.a $(LDFLAGS)
+LDFLAGS := $(MBEDTLS_DIR)/lib/libmbedtls.a $(MBEDTLS_DIR)/lib/libmbedx509.a \
+           $(MBEDTLS_DIR)/lib/libmbedcrypto.a $(LDFLAGS)
 endif
 endif
 

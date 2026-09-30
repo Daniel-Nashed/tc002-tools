@@ -229,6 +229,7 @@ the single source of truth; this table just mirrors it for human reference.
 | curl, nginx, openssl, 7zz                             | compressed-on-demand | genuinely larger, occasional use - 7zz is ~1.7 MB, closer to curl than any persistent tool here |
 | awtrix_autostart                                      | persistent           | startup-critical on an AWTRIX-flashed device - see "AWTRIX autostart" below |
 | vim (+`vim.bin`, wrapper, `vicfg`, `defaults.vim`)     | persistent           | OPTIONAL - ~1.4 MB static, but `vi`/`edit` need to start instantly; never deployed automatically, see "vim" below |
+| update-from-github                                    | persistent           | a small checked-in script, not a compiled binary - see "update-from-github" below |
 | *(none yet)*                                          | ram                  | mechanism exists per-tool if ever needed - see below |
 
 The persistent, single-binary tools with nothing else special about them (`kilo`, `gzip`, `nshbox`) share one
@@ -363,6 +364,41 @@ gets pushed:
   text, not the ADB shell exit code (unreliable on this device - see `push_etc_override()`'s own comments in
   `../install/common.sh`), and never overwrites it once present, so an admin's own edits survive every later
   rebuild/redeploy of `vim.bin` itself.
+
+### update-from-github
+
+The on-device counterpart of [`../pull-release.sh`](../pull-release.sh), which does the same job from the host over
+ADB/SSH: pulls a newer release of this project's own core tools straight from GitHub, on the device itself, over an
+already-established SSH session - no host round-trip needed. Installed as `INSTALL_PREFIX/bin/update-from-github` by
+`install/install_tools.sh` (ADB, first install) and `install/update_tools.sh` (SSH, updates) - see
+[`../runtime/update_from_github.sh`](../runtime/update_from_github.sh) for the full script.
+
+```
+update-from-github [VERSION|latest] [--repo OWNER/REPO]
+```
+
+Updates whichever of `dropbearmulti`, `nshbox`, `kilo`, `gzip` and `ncdu`'s binary (installed as `ncdu.bin`, same as
+`install_etc.sh` - `ncdu`'s wrapper script and terminfo are untouched) are **already installed** on this particular
+device - this is an update, not an install: a tool this device was never given (e.g. `ncdu`, on a flash-space-conscious
+deployment) is skipped, not added. Uses `nshbox wget` (TLS + CA-bundle
+verification, redirect following - see [`../nshbox/README.md`](../nshbox/README.md)) against the same
+per-asset `.sha256` sidecar files every release already publishes (see [`releasing.md`](releasing.md)) - no separate
+checksum manifest, same trust model as `pull-release.sh`. With no version given (or `latest` explicitly), the real
+tag is read off `wget`'s own redirect-notice line when it follows `github.com/<repo>/releases/latest` - nshbox has
+no JSON parsing, so this avoids needing the GitHub API or `jq` on-device for that one field.
+
+Downloads and verifies every tool into a staging file (`.{name}.new`) next to its real target in
+`INSTALL_PREFIX/bin` before touching anything live; only once every download has verified does it `mv` each one onto
+its real name - a same-filesystem rename, so it is atomic (a process with the old binary already open keeps running
+against it untouched, same as `install_dropbear.sh`'s own binary-refresh already relies on) and the real path is
+never visible half-written. Afterward, recreates `dropbearmulti`'s five applet symlinks and runs
+`nshbox install -fq` to refresh nshbox's own - the same two steps `init.sh` already performs defensively at boot.
+
+Deliberately does not touch `authorized_keys`, the Dropbear host key, ncdu's wrapper/terminfo, the CA bundle, the
+compressed-on-demand tier (curl/nginx/openssl/7zz - not part of releases yet at all), or its own script file on the
+device (a shell script overwriting itself while it is the thing currently interpreting and running is a real hazard
+for no real payoff here) - get a newer copy of the script itself the normal way, by re-running
+`install_tools.sh`/`update_tools.sh` from a newer checkout.
 
 ### Trusted root CA bundle
 
