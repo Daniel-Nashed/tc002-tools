@@ -28,6 +28,7 @@
 /data/bin/on-demand.tar.gz         (optional - compressed-on-demand tools bundled together, see "Deployment modes")
 /data/bin/on-demand-run            (optional - shared wrapper, symlinked as /data/bin/curl, /data/bin/nginx, etc.)
 /data/bin/disable_adb.sh           (optional, deliberately not auto-installed - see below)
+/data/awtrix-ng/state/autostart    (AWTRIX-flashed devices only - see "AWTRIX autostart" below)
 ```
 
 Every executable this project ships - compiled binaries and the `sshd.sh` start script alike - lives directly under
@@ -226,6 +227,7 @@ the single source of truth; this table just mirrors it for human reference.
 | nshbox, kilo, gzip                                    | persistent           | small, frequently used; `gzip` is also the compressed-on-demand tier's own decompressor - see below |
 | ncdu (+`ncdu.bin`, wrapper, terminfo)                  | persistent           | only 204 KB - smaller than curl/nginx by 5-16x, not worth the on-demand tier's own overhead; see `install_etc.sh` |
 | curl, nginx, openssl, 7zz                             | compressed-on-demand | genuinely larger, occasional use - 7zz is ~1.7 MB, closer to curl than any persistent tool here |
+| awtrix_autostart                                      | persistent           | startup-critical on an AWTRIX-flashed device - see "AWTRIX autostart" below |
 | *(none yet)*                                          | ram                  | mechanism exists per-tool if ever needed - see below |
 
 The persistent, single-binary tools with nothing else special about them (`kilo`, `gzip`, `nshbox`) share one
@@ -301,6 +303,37 @@ This is why `gzip` and `nshbox` themselves must stay **persistent**: they
 are the compressed-on-demand tier's own machinery. If either were itself
 on-demand, nothing on the device could unpack it - the wrapper's own
 decompression step would have no decompressor to call.
+
+### AWTRIX autostart
+
+[AWTRIX NG](https://github.com/Blueforcer/awtrix-ng) - normally a TC001 (ESP32) firmware replacement, see
+[platform.md](platform.md#tc001-vs-tc002-two-different-devices-not-two-versions-of-the-same-one) - is gaining
+TC002 support (closed beta at time of writing, not yet a public release of Blueforcer's own). On a device already
+running it, AWTRIX itself execs `/data/awtrix-ng/state/autostart` at boot if that file exists - its own
+autostart hook, not something this project invented or controls. That is currently the **only** persistent-startup
+mechanism this project can hook into at all: this project's own boot process is otherwise still an open question
+(see [architecture.md](architecture.md)'s "still open" list), so on stock (non-AWTRIX) firmware, Dropbear still does
+not survive a reboot - `./tc002_start.sh` remains necessary there, see
+[manual_rollout.md](manual_rollout.md#after-a-reboot).
+
+`install/install_awtrix_autostart.sh` pushes `runtime/awtrix_autostart.sh` to that exact path (mode 755, since
+AWTRIX execs it directly) - a small script that just calls `/data/bin/init.sh` (see "Canonical layout" above),
+so Dropbear starts the same way it would from a manual `adb shell /data/bin/init.sh`, but automatically, every
+boot. It first checks whether `/data/awtrix-ng/state` exists on the device at all, and skips itself with a log
+line (not an error) if it does not - a stock device simply has no such path, and this project never assumes AWTRIX
+is present. Safe to re-run, and wired into `deploy.sh` right after `install_dropbear.sh` (needs `init.sh` already
+pushed).
+
+```sh
+#!/bin/sh
+date >> /tmp/autostart.trace
+/data/bin/init.sh
+exit 0
+```
+
+The `/tmp/autostart.trace` line is deliberately minimal - just a timestamp on tmpfs, lost on reboot - kept only so
+a future boot-order question (e.g. "did this run before or after Wi-Fi came up?") is still answerable without
+adding real diagnostics back in.
 
 ### Trusted root CA bundle
 

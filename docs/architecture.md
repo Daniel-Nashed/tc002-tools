@@ -56,10 +56,11 @@ Where each script runs: **host** is your own machine, **container** is one of th
 | `install_tools.sh`               | Pushes the simple persistent tools: `nshbox` (plus its applet links), `kilo`, `gzip`.                                                   |
 | `install_etc.sh`                 | Pushes `setup_etc.sh`, the `/etc` overrides, the CA bundle, and `ncdu` with its terminfo.                                               |
 | `install_on_demand.sh`           | Pushes `on-demand.tar.gz`, the wrapper `on-demand-run`, and the links for `curl`, `nginx`, `7zz` (and `openssl` with `--with-openssl`). |
+| `install_awtrix_autostart.sh`    | Pushes the AWTRIX autostart hook so Dropbear starts automatically at boot - AWTRIX-flashed devices only, skipped with a log line otherwise. See [device_layout.md](device_layout.md#awtrix-autostart). |
 | `start.sh` / `start_dropbear.sh` | Find the device (`start.sh` only) and start Dropbear through `init.sh`. Used by `tc002_start.sh`.                                       |
 | `verify_installation.sh`         | Checks that what is on the device matches `dist/` (checksums, symlinks), and reports free memory.                                       |
 | `disable_adb.sh`                 | Pushes the ADB-retirement helper only; it never runs it. See [recovery.md](recovery.md).                                                |
-| `enable_startup.sh`              | Placeholder: persistent startup is not implemented yet.                                                                                 |
+| `enable_startup.sh`              | Placeholder for stock firmware: persistent startup on non-AWTRIX devices is still not implemented. AWTRIX-flashed devices get it instead through `install_awtrix_autostart.sh` - see [device_layout.md](device_layout.md#awtrix-autostart). |
 | `common.sh`                      | Shared helpers and the deployment-mode table (`deployment_mode_for()`). Sourced, never run.                                             |
 
 ### On the device (`runtime/`)
@@ -73,6 +74,7 @@ Where each script runs: **host** is your own machine, **container** is one of th
 | `ncdu.sh`          | Wrapper for `ncdu` that points ncurses at the shipped terminfo.                                                              |
 | `kilo.sh`          | Wrapper installed as both `vi` and `edit`.                                                                                   |
 | `disable_adb.sh`   | Stops `adbd`. Run it on the device on purpose, never from the deploy scripts.                                                |
+| `awtrix_autostart.sh` | AWTRIX's own autostart hook, installed as `/data/awtrix-ng/state/autostart` - calls `init.sh`. AWTRIX-flashed devices only, see [device_layout.md](device_layout.md#awtrix-autostart). |
 
 ### Tests
 
@@ -177,8 +179,9 @@ Not yet implemented or verified through this repository's own pipeline:
 - `nshbox --help`/`--version` (required by the implementation brief) are not implemented yet - see
   [nshbox/README.md](../nshbox/README.md).
 - `kilo` has not yet been installed or run on the actual device - see [../kilo/README.md](../kilo/README.md).
-- Persistent startup across a cold boot (see [manual_rollout.md](manual_rollout.md) for the manual foreground-launch
-  procedure used today).
+- Persistent startup across a cold boot on **stock firmware** - still open (see [manual_rollout.md](manual_rollout.md)
+  for the manual foreground-launch procedure used today). Solved for **AWTRIX-flashed** devices instead, via
+  AWTRIX's own autostart hook - see [device_layout.md](device_layout.md#awtrix-autostart).
 - Behavior of the firmware supervisor when `adbd` is stopped.
 - ADB retirement (intentionally gated - see [recovery.md](recovery.md)).
 - Behavior on any TC002 firmware or hardware revision other than the one tested.

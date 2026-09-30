@@ -88,62 +88,8 @@ fi
 
 require_device
 
-# Populates the BUNDLED array (global, bash-array-friendly - this whole
-# script runs on the host, not on-device, so bash arrays are fine here,
-# unlike anything under runtime/) with the on-demand tools that actually
-# have a dist/ artifact built, using on_demand_source_path() rather than
-# assuming every tool sits at a flat "${DIST_DIR}/${name}" (openssl's CLI
-# does not - see common.sh). Logs a skip line for anything not built yet
-# rather than treating it as an error - matches deploy.sh's own
-# install_if_built idiom.
-BUNDLED=()
-
-collect_bundled()
-{
-  local name src
-
-  for name in $(on_demand_tools)
-  do
-    src="$(on_demand_source_path "$name")"
-
-    if [ -f "$src" ]; then
-      BUNDLED+=("$name")
-    else
-      log "skipping ${name}: ${src} not built yet"
-    fi
-  done
-}
-
-# Real host tar/gzip (whatever GNU tar or bsdtar the operator's own
-# machine has) - not nshbox's own tar, not the device's. This only
-# repackages already-cross-compiled dist/ artifacts, so there is no
-# cross-compilation or device-compatibility concern here at all; the only
-# place device-side tar/gzip capability matters is on-device inside
-# runtime/on-demand-run.sh, which uses nshbox's own tar (see its README).
-#
-# Each tool gets its own "-C dir name" pair rather than one blanket
-# "-C $DIST_DIR ${BUNDLED[*]}" - real GNU tar applies -C positionally, so
-# mixing per-tool source directories in one invocation still produces a
-# flat archive (member names are just each tool's own basename, with no
-# leading path) even though openssl's real file lives nested under
-# dist/openssl/device/data/bin/, not at dist/openssl directly.
-build_archive()
-{
-  local archive="${DIST_DIR}/on-demand.tar.gz"
-  local name src
-  local tar_args=()
-
-  require_cmd tar
-
-  for name in "${BUNDLED[@]}"
-  do
-    src="$(on_demand_source_path "$name")"
-    tar_args+=(-C "$(dirname "$src")" "$(basename "$src")")
-  done
-
-  tar -czf "$archive" "${tar_args[@]}"
-  log "built ${archive} ($(du -h "$archive" | cut -f1)) containing: ${BUNDLED[*]}"
-}
+# collect_bundled()/build_archive()/BUNDLED are shared with
+# update_tools.sh - see their own comments in common.sh.
 
 push_archive()
 {

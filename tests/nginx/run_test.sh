@@ -15,13 +15,24 @@
 # non-zero if anything failed. Details (nginx -t, the pushes, the error log)
 # are shown when a check fails, or always with --verbose. Uses the device
 # settings of config/tc002-tools.conf like the install scripts do.
+#
+# SSH-only, deliberately, not ADB - this project's own stated direction:
+# ADB is for first deployment (before SSH exists on the device at all), and
+# everything after that - including this test - moves to SSH. This test in
+# particular has no reason to fall back to ADB even as a convenience: its
+# own curl checks already need the device's real network address (TARGET_IP)
+# regardless of what pushes files and runs commands, so there is no "USB
+# only, no network" case this test could ever usefully run under anyway -
+# see the discussion in the project's own history for why. Needs an SSH key
+# already authorized on the device (see install/install_dropbear.sh) and
+# SSH_PORT in the config, same requirement tests/test_device_access.sh
+# already has.
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${TEST_DIR}/../../install/common.sh"
 
 CONFIG_FILE="${REPO_ROOT}/config/tc002-tools.conf"
-DEVICE_OVERRIDE=""
 CERT_KIND="both"
 KEEP=0
 VERBOSE=0
@@ -51,17 +62,16 @@ usage()
 {
   cat <<'EOF'
 Usage: run_test.sh [--cert rsa|ec|both] [--ip ADDRESS] [--keep] [--verbose]
-                   [--device SERIAL] [--config FILE]
+                   [--config FILE]
 
-Runs the nginx test on the TC002 (see README.md in this directory).
+Runs the nginx test on the TC002 over SSH (see README.md in this directory).
 
   --cert rsa|ec|both  Certificates to test (default: both, an RSA step then an ECDSA step).
-  --ip ADDRESS      Address curl uses to reach the device (default: DEVICE_IP
-                     from the config file).
+  --ip ADDRESS      Address ssh/scp/curl use to reach the device (default:
+                     DEVICE_IP from the config file).
   --keep            Leave nginx running and /tmp/ngx in place afterwards.
   --verbose         Show the details (nginx -t, pushes, error log) always,
                      not only when a check fails.
-  --device SERIAL   ADB device serial (overrides DEVICE from config).
   --config FILE     Config file (default: config/tc002-tools.conf).
   -h, --help        Show this help.
 EOF
@@ -86,10 +96,6 @@ do
       VERBOSE=1
       shift
       ;;
-    --device)
-      DEVICE_OVERRIDE="$2"
-      shift 2
-      ;;
     --config)
       CONFIG_FILE="$2"
       shift 2
@@ -109,19 +115,12 @@ case "$CERT_KIND" in
   *) die "--cert must be rsa, ec or both" ;;
 esac
 
-require_cmd adb
+require_cmd ssh
+require_cmd scp
 require_cmd curl
 require_cmd openssl
 
 load_config "$CONFIG_FILE"
-
-if [ -n "$DEVICE_OVERRIDE" ]; then
-  DEVICE="$DEVICE_OVERRIDE"
-fi
-
-# require_device logs one line ("adb connect ...") - that is the only
-# bookkeeping output this script leaves in.
-require_device
 
 if [ -z "$TARGET_IP" ]; then
   TARGET_IP="$DEVICE_IP"
@@ -134,9 +133,25 @@ fi
 NGINX_BIN="${INSTALL_PREFIX}/bin/nginx"
 FREE_BIN="${INSTALL_PREFIX}/bin/free"
 
+# Same options tests/test_device_access.sh already uses: BatchMode so a
+# missing/rejected key fails fast instead of hanging on a password prompt,
+# StrictHostKeyChecking=accept-new so a first connection is not blocked by
+# an interactive fingerprint prompt but a CHANGED key still is (never
+# silently accepted).
+SSH_OPTS=(-p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new)
+
 device()
 {
-  adb -s "$DEVICE" shell "$@" | tr -d '\r'
+  ssh "${SSH_OPTS[@]}" "root@${TARGET_IP}" "$@"
+}
+
+push()
+{
+  local local_path="$1"
+  local remote_path="$2"
+
+  scp -O -P "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+    "$local_path" "root@${TARGET_IP}:${remote_path}" >/dev/null
 }
 
 say()
@@ -323,8 +338,8 @@ push_cert()
 
   rm -f "${WORK_DIR_HOST}/c.pem" "${WORK_DIR_HOST}/k.pem"
   "${TEST_DIR}/make_cert.sh" "$kind" "$WORK_DIR_HOST" >/dev/null
-  adb -s "$DEVICE" push "${WORK_DIR_HOST}/c.pem" "${REMOTE_DIR}/c.pem" >/dev/null
-  adb -s "$DEVICE" push "${WORK_DIR_HOST}/k.pem" "${REMOTE_DIR}/k.pem" >/dev/null
+  push "${WORK_DIR_HOST}/c.pem" "${REMOTE_DIR}/c.pem"
+  push "${WORK_DIR_HOST}/k.pem" "${REMOTE_DIR}/k.pem"
   device "chmod 600 ${REMOTE_DIR}/k.pem" >/dev/null
 }
 
@@ -404,7 +419,7 @@ main()
   last="${kinds##* }"
 
   echo
-  printf 'nginx test on the TC002  (%s, certificates: %s)\n' "$TARGET_IP" "$CERT_KIND"
+  printf 'nginx test on the TC002  (ssh %s:%s, certificates: %s)\n' "$TARGET_IP" "$SSH_PORT" "$CERT_KIND"
   echo
 
   device "test -x ${NGINX_BIN}" >/dev/null 2>&1 \
@@ -418,8 +433,8 @@ main()
   # it is opened before the configuration is read, so without it nginx prints
   # an alert (harmless, but noisy).
   device "rm -rf ${REMOTE_DIR}; mkdir -p ${REMOTE_DIR}/www ${REMOTE_DIR}/logs" >/dev/null
-  adb -s "$DEVICE" push "${TEST_DIR}/nginx.conf" "${REMOTE_DIR}/nginx.conf" >/dev/null
-  adb -s "$DEVICE" push "${TEST_DIR}/www/index.html" "${REMOTE_DIR}/www/index.html" >/dev/null
+  push "${TEST_DIR}/nginx.conf" "${REMOTE_DIR}/nginx.conf"
+  push "${TEST_DIR}/www/index.html" "${REMOTE_DIR}/www/index.html"
   say "files pushed to ${REMOTE_DIR} (RAM); certificates are made on this host, valid 7 days"
   echo
 

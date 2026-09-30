@@ -154,6 +154,14 @@ require_device()
 #                                                        nginx 3.1 MB - far above any persistent
 #                                                        tool here, so they join this tier rather
 #                                                        than install_tools.sh's SIMPLE_TOOLS)
+# awtrix_autostart                                      persistent (startup-critical on an
+#                                                        AWTRIX-flashed device - AWTRIX execs
+#                                                        /data/awtrix-ng/state/autostart itself
+#                                                        at boot, calling init.sh - the only
+#                                                        persistent-startup path that exists once
+#                                                        network ADB is gone; installed by
+#                                                        install_awtrix_autostart.sh, skipped with
+#                                                        a log line on a non-AWTRIX device)
 #
 # tc002-discover is deliberately absent - not managed by this table at
 # all; it never touches the device (see its own README). No tool is
@@ -171,11 +179,23 @@ deployment_mode_for()
     curl|nginx|openssl|7zz)
       echo "compressed-on-demand"
       ;;
+    awtrix_autostart)
+      echo "persistent"
+      ;;
     *)
       die "no deployment mode configured for '$1' - add it to deployment_mode_for() in install/common.sh"
       ;;
   esac
 }
+
+# kilo/gzip/nshbox today - the "simple" persistent, single-binary tools
+# (see install_tools.sh's own comment for why dropbear/ncdu are not in this
+# list). Shared here, not declared separately in install_tools.sh, because
+# update_tools.sh (the SSH-based "just push new binaries" counterpart to
+# install_tools.sh's ADB-based first-time install - see its own comments)
+# needs the exact same list; one source of truth means adding a new simple
+# tool only ever needs a single line changed, here.
+SIMPLE_TOOLS="kilo gzip nshbox"
 
 # Optional on-device command to run right after install_binary() pushes a
 # tool - a table, not a separate script per tool, for anything whose only
@@ -208,6 +228,103 @@ run_post_install_hook()
   if [ -n "$hook" ]; then
     log "running '${INSTALL_PREFIX}/bin/${name} ${hook}' on the device"
     adb -s "$DEVICE" shell "${INSTALL_PREFIX}/bin/${name} ${hook}"
+  fi
+}
+
+# ---------------------------------------------------------------------
+# SSH transport - the update_tools.sh counterpart to require_device()/
+# install_binary()/run_post_install_hook() above, for scripts that talk to
+# an already-provisioned device over SSH instead of ADB (see
+# update_tools.sh, tests/nginx/run_test.sh, tests/test_device_access.sh).
+# Deliberately separate functions rather than adding a transport switch to
+# the ADB ones above: install_tools.sh/install_etc.sh/install_dropbear.sh
+# etc. are first-time-setup scripts that only ever run before SSH exists at
+# all, so they have no reason to grow an SSH path, and forcing one
+# transport-agnostic function to handle both would make every call site
+# carry a branch it never actually takes.
+# ---------------------------------------------------------------------
+
+# Sets the global SSH_OPTS array from DEVICE_IP/SSH_PORT - the SSH
+# counterpart to require_device()'s ADB connect check. Does not itself
+# verify reachability (unlike require_device(), which uses "adb connect" as
+# a live probe) - ssh's own ConnectTimeout/BatchMode do that on first real
+# use instead, same as every script using this pattern already did before
+# it was factored out here.
+require_device_ssh()
+{
+  if [ -z "$DEVICE_IP" ]; then
+    die "DEVICE_IP is not set in your config - SSH-based scripts need it (see docs/manual_rollout.md); run install/discover_device.sh, or use ./tc002_setup.sh for first-time deployment"
+  fi
+
+  SSH_OPTS=(-p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new)
+}
+
+ssh_exec()
+{
+  ssh "${SSH_OPTS[@]}" "root@${DEVICE_IP}" "$@"
+}
+
+ssh_push()
+{
+  local local_path="$1"
+  local remote_path="$2"
+
+  scp -O -P "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+    "$local_path" "root@${DEVICE_IP}:${remote_path}" >/dev/null
+}
+
+# SSH counterpart to install_binary() - identical deployment-mode lookup
+# and dest_dir/file_mode overrides, pushed over ssh_push()/ssh_exec()
+# instead of adb push/shell. Requires require_device_ssh() to have already
+# set SSH_OPTS.
+install_binary_ssh()
+{
+  local name="$1"
+  local built="${2:-${DIST_DIR}/${name}}"
+  local device_name="${3:-$name}"
+  local dest_dir_override="${4:-}"
+  local file_mode="${5:-755}"
+  local mode dest_dir dest
+
+  if [ ! -f "$built" ]; then
+    die "built artifact not found: ${built}"
+  fi
+
+  mode="$(deployment_mode_for "$name")"
+
+  case "$mode" in
+    persistent)
+      dest_dir="${dest_dir_override:-${INSTALL_PREFIX}/bin}"
+      ;;
+    ram)
+      dest_dir="${dest_dir_override:-/tmp/bin}"
+      ssh_exec "mkdir -p ${dest_dir}"
+      ;;
+    compressed-on-demand)
+      die "install_binary_ssh() does not handle '${name}' (mode: compressed-on-demand) - see install_on_demand.sh"
+      ;;
+    *)
+      die "unknown deployment mode '${mode}' for '${name}'"
+      ;;
+  esac
+
+  dest="${dest_dir}/${device_name}"
+
+  ssh_push "$built" "$dest"
+  ssh_exec "chmod ${file_mode} ${dest} && chown 0:0 ${dest}"
+  log "installed ${dest} (${mode}, via SSH)"
+}
+
+# SSH counterpart to run_post_install_hook().
+run_post_install_hook_ssh()
+{
+  local name="$1"
+  local hook
+  hook="$(post_install_hook_for "$name")"
+
+  if [ -n "$hook" ]; then
+    log "running '${INSTALL_PREFIX}/bin/${name} ${hook}' on the device (via SSH)"
+    ssh_exec "${INSTALL_PREFIX}/bin/${name} ${hook}"
   fi
 }
 
@@ -269,6 +386,81 @@ on_demand_alias_for()
       echo ""
       ;;
   esac
+}
+
+# Populates the BUNDLED array (global - both install_on_demand.sh and
+# update_tools.sh run on the host, so a bash array is fine here, unlike
+# anything under runtime/) with the on-demand tools that actually have a
+# dist/ artifact built, via on_demand_source_path() rather than assuming
+# every tool sits at a flat "${DIST_DIR}/${name}" (openssl's CLI does not).
+# Logs a skip line for anything not built yet rather than treating it as
+# an error. Shared between install_on_demand.sh (ADB, first-time) and
+# update_tools.sh (SSH, updates) - both need the exact same "what is
+# actually built right now" answer.
+BUNDLED=()
+
+collect_bundled()
+{
+  local name src
+
+  BUNDLED=()
+
+  for name in $(on_demand_tools)
+  do
+    src="$(on_demand_source_path "$name")"
+
+    if [ -f "$src" ]; then
+      BUNDLED+=("$name")
+    else
+      log "skipping ${name}: ${src} not built yet"
+    fi
+  done
+}
+
+# Packs BUNDLED (collect_bundled() must have run first) into
+# dist/on-demand.tar.gz using the real host tar/gzip - not nshbox's own,
+# not the device's; this only repackages already-cross-compiled dist/
+# artifacts, so there is no cross-compilation or device-compatibility
+# concern here (device-side tar/gzip capability only matters inside
+# runtime/on-demand-run.sh, which uses nshbox's own tar - see its README).
+# Each tool gets its own "-C dir name" pair rather than one blanket
+# "-C $DIST_DIR ${BUNDLED[*]}" - real GNU tar applies -C positionally, so
+# mixing per-tool source directories in one invocation still produces a
+# flat archive (member names are just each tool's own basename, no leading
+# path) even though openssl's real file lives nested under
+# dist/openssl/device/data/bin/, not at dist/openssl directly. Shared
+# between install_on_demand.sh and update_tools.sh - identical packaging
+# either way, only the push transport (ADB vs SSH) differs.
+build_archive()
+{
+  local archive="${DIST_DIR}/on-demand.tar.gz"
+  local name src
+  local tar_args=()
+
+  require_cmd tar
+
+  for name in "${BUNDLED[@]}"
+  do
+    src="$(on_demand_source_path "$name")"
+    tar_args+=(-C "$(dirname "$src")" "$(basename "$src")")
+  done
+
+  tar -czf "$archive" "${tar_args[@]}"
+  log "built ${archive} ($(du -h "$archive" | cut -f1)) containing: ${BUNDLED[*]}"
+}
+
+# SHA-256 of a file already on the device, over SSH, via nshbox's own
+# sha256sum applet by absolute path - same PATH reasoning
+# verify_installation.sh's verify_binary() documents for its ADB
+# equivalent (bare "sha256sum" is not on this device's own PATH). Empty
+# output means the file does not exist yet (or nshbox itself is not
+# installed) - never dies, so a caller can use this as a plain "did this
+# change" check.
+remote_sha256_ssh()
+{
+  local device_path="$1"
+
+  ssh_exec "${INSTALL_PREFIX}/bin/sha256sum ${device_path} 2>/dev/null" | tr -d '\r' | cut -d' ' -f1
 }
 
 # Pushes one built artifact to the device according to its configured

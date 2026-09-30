@@ -1,0 +1,9 @@
+# Generated test certs/keys - never commit a private key, even a throwaway one.
+*.crt
+*.key
+
+# Build outputs
+certgen_mbedtls
+certgen_openssl
+whoami_mbedtls
+whoami_openssl

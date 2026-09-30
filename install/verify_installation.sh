@@ -20,11 +20,12 @@ source "${SCRIPT_DIR}/common.sh"
 CONFIG_FILE="${REPO_ROOT}/config/tc002-tools.conf"
 DEVICE_OVERRIDE=""
 FAILED=0
+CHECK_ONLY=0
 
 usage()
 {
   cat <<'EOF'
-Usage: verify_installation.sh [--device SERIAL] [--config FILE] [--with-openssl]
+Usage: verify_installation.sh [--device SERIAL] [--config FILE] [--with-openssl] [--check]
 
 Checks that dropbear/scp/dropbearkey/dbclient/dropbearconvert/init.sh/
 sshd.sh/setup_etc.sh/nshbox/kilo/gzip/ncdu on the device match the
@@ -36,6 +37,11 @@ compressed-on-demand archive/wrapper match and every bundled tool
 (curl/nginx/7zz, and openssl with --with-openssl) is a symlink to the wrapper
 on-device. Exits non-zero if anything fails.
 
+  --check           Exit 1 quietly on failure instead of die()-ing - for a
+                       caller that just wants a pass/fail signal (deploy.sh
+                       uses this to decide whether a device is already
+                       fully provisioned and the rest of the pipeline can
+                       be skipped, see its own -y/--force flag).
   --device SERIAL   ADB device serial (overrides DEVICE from config).
   --config FILE     Config file (default: config/tc002-tools.conf).
   -h, --help        Show this help.
@@ -55,6 +61,10 @@ do
       ;;
     --with-openssl)
       export TC002_INSTALL_OPENSSL_CLI=1
+      shift
+      ;;
+    --check)
+      CHECK_ONLY=1
       shift
       ;;
     -h|--help)
@@ -184,6 +194,25 @@ verify_on_demand()
   done
 }
 
+# AWTRIX autostart hook (install_awtrix_autostart.sh) - only present at all
+# on an AWTRIX-flashed device; skipped with a log line, not a failure, on a
+# stock device (same "not applicable here" reasoning as verify_on_demand()
+# skipping when nothing compressed-on-demand was ever built - see its own
+# comments).
+verify_awtrix_autostart()
+{
+  local state_dir_check
+
+  state_dir_check="$(adb -s "$DEVICE" shell "[ -d /data/awtrix-ng/state ] && echo yes" 2>&1 | tr -d '\r')"
+
+  if [ "$state_dir_check" != "yes" ]; then
+    log "SKIP: AWTRIX autostart not applicable (no /data/awtrix-ng/state on this device)"
+    return
+  fi
+
+  verify_binary awtrix_autostart "${REPO_ROOT}/runtime/awtrix_autostart.sh" "autostart" "/data/awtrix-ng/state/autostart"
+}
+
 verify_present()
 {
   local label="$1"
@@ -253,6 +282,7 @@ main()
   verify_binary ncdu "${DIST_DIR}/ncdu" "ncdu.bin"
   verify_binary ncdu-wrapper "${REPO_ROOT}/runtime/ncdu.sh" "ncdu"
   verify_on_demand
+  verify_awtrix_autostart
   verify_present "authorized_keys" "${INSTALL_PREFIX}/home/.ssh/authorized_keys" 1
   verify_present "dropbear host key" "${INSTALL_PREFIX}/home/dropbear_ed25519_host_key" 0
   verify_present "ncdu terminfo (xterm-256color)" "${INSTALL_PREFIX}/share/terminfo/x/xterm-256color" 0
@@ -260,6 +290,11 @@ main()
   report_memory
 
   if [ "$FAILED" -eq 1 ]; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      log "verification failed for device ${DEVICE} (see above)"
+      exit 1
+    fi
+
     die "one or more verification checks failed"
   fi
 

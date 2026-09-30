@@ -1,9 +1,11 @@
 # Manual rollout
 
-Provisioning one TC002 device. This is the verified procedure today - there is no persistent startup yet (see
-[architecture.md](architecture.md)), so `init.sh` (step 6) has to be re-run after every reboot - `./tc002_start.sh`
-does exactly that (finds the device again, since DHCP may have handed it a new IP, then runs `init.sh` over `adb
-shell`) without re-pushing anything, see "After a reboot" below.
+Provisioning one TC002 device. This is the verified procedure today - on stock firmware there is still no
+persistent startup (see [architecture.md](architecture.md)), so `init.sh` (step 6) has to be re-run after every
+reboot - `./tc002_start.sh` does exactly that (finds the device again, since DHCP may have handed it a new IP, then
+runs `init.sh` over `adb shell`) without re-pushing anything, see "After a reboot" below. An **AWTRIX-flashed**
+device is the exception: step 4a below installs a hook AWTRIX itself execs at boot, so `init.sh` (and so Dropbear)
+starts automatically every time - `./tc002_start.sh` is then only needed if Dropbear was stopped without a reboot.
 
 ## Prerequisites
 
@@ -129,6 +131,21 @@ see step 6) to `/data/bin`, and installs your authorized key to `/data/home/.ssh
 `/etc` (step 3, above, already did), generate the host key, or start Dropbear - `init.sh` (which hands off to
 `sshd.sh`) does the latter two, on-device, the first time you run it.
 
+## 4a. Install the AWTRIX autostart hook (AWTRIX-flashed devices only)
+
+```sh
+install/install_awtrix_autostart.sh
+```
+
+Needs `init.sh` already pushed (step 4, above - the hook just calls it). Pushes
+[`runtime/awtrix_autostart.sh`](../runtime/awtrix_autostart.sh) to `/data/awtrix-ng/state/autostart` - a path
+[AWTRIX NG](https://github.com/Blueforcer/awtrix-ng) itself execs at boot on a device already running it (closed
+beta TC002 support at time of writing) - so Dropbear starts automatically every time the device powers on, without
+ever needing `./tc002_start.sh` after a plain reboot. Checks whether `/data/awtrix-ng/state` exists on the device
+first and skips itself, with a log line, if it does not - a stock device has no such path, and this step is a
+no-op there, not an error. See [device_layout.md](device_layout.md#awtrix-autostart) for the full mechanism and
+why it's the only persistent-startup path this project currently has at all. Safe to re-run.
+
 ## 5. Verify the installation (no SSH yet)
 
 ```sh
@@ -225,12 +242,18 @@ throwaway file).
 
 ## After a reboot
 
+**AWTRIX-flashed devices**: nothing to do - step 4a's hook already restarted Dropbear automatically. Only the
+device's IP may have changed (DHCP); `tests/test_device_access.sh` (or `install/discover_device.sh`, which
+re-learns it over USB) is enough to find it again.
+
+**Stock firmware**:
+
 ```sh
 ./tc002_start.sh
 ```
 
-Dropbear does not survive a reboot yet (see "What this procedure does not cover yet" below), and the device's IP may
-have changed too (DHCP), so getting SSH back up needs both device discovery and step 6 again. `tc002_setup.sh` still
+Dropbear does not survive a reboot on stock firmware (see "What this procedure does not cover yet" below), and the
+device's IP may have changed too (DHCP), so getting SSH back up needs both device discovery and step 6 again. `tc002_setup.sh` still
 works for this (every step it runs is idempotent), but it unconditionally re-pushes every binary on every run, which
 is unnecessary once a device has already been provisioned once - `tc002_start.sh` only runs
 [install/discover_device.sh](../install/discover_device.sh) and [install/start_dropbear.sh](../install/start_dropbear.sh)
@@ -243,9 +266,10 @@ adb shell /data/bin/init.sh
 
 ## What this procedure does not cover yet
 
-- **Persistent startup.** Dropbear does not survive a reboot yet - re-run `./tc002_start.sh` (or the full
-  `tc002_setup.sh`, or just step 6, `adb shell /data/bin/init.sh`, if you already know the device's current IP)
-  after every power cycle. See [architecture.md](architecture.md) and [platform.md](platform.md) for what is still
-  unknown about the boot process.
+- **Persistent startup on stock firmware.** Dropbear does not survive a reboot - re-run `./tc002_start.sh` (or the
+  full `tc002_setup.sh`, or just step 6, `adb shell /data/bin/init.sh`, if you already know the device's current
+  IP) after every power cycle. See [architecture.md](architecture.md) and [platform.md](platform.md) for what is
+  still unknown about the boot process. Solved on **AWTRIX-flashed** devices by step 4a instead - see
+  [device_layout.md](device_layout.md#awtrix-autostart).
 - **ADB retirement.** `adbd` stays enabled throughout this procedure and after it. See [recovery.md](recovery.md) and
   [security.md](security.md) for why that is a deliberate, gated decision, not an oversight.

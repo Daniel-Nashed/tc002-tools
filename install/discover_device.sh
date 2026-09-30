@@ -1,16 +1,39 @@
 #!/usr/bin/env bash
 # The first step of a full deployment, before install_dropbear.sh: finds
-# the TC002's IP address using this project's own host-side discovery
-# tool (../tc002-discover - see its own README), instead of requiring an
-# operator to type DEVICE_IP in by hand, then writes it into
-# config/tc002-tools.conf so every other install/*.sh script picks it up
-# the normal way (load_config() in common.sh) - no separate passthrough
-# mechanism needed.
+# the TC002 - first by checking for an already-connected ADB device (USB,
+# or an existing session), then, only if that finds nothing, using this
+# project's own host-side network discovery tool (../tc002-discover - see
+# its own README) - instead of requiring an operator to type DEVICE_IP or
+# DEVICE in by hand. Writes whatever it finds into config/tc002-tools.conf
+# so every other install/*.sh script picks it up the normal way
+# (load_config() in common.sh) - no separate passthrough mechanism needed.
+#
+# USB is checked first, not network: "adb devices" is instant (no
+# broadcast timeout to wait out), and when a device is already reachable
+# that way, it is the most direct, certain path - this also covers a
+# device whose network route changed or disappeared entirely (e.g. no
+# longer reachable at its last known DEVICE_IP) as long as it is still
+# physically connected over USB.
+#
+# When a USB device is found, this also tries to learn its network IP (via
+# "ifconfig" - see learn_ip_via_adb()'s own comment for why not "ip") and
+# store it as DEVICE_IP alongside DEVICE - not just for
+# this run, but for every SSH-based script afterward (tests/nginx/run_test.sh,
+# tests/test_device_access.sh, ...), on the assumption this project is
+# moving away from relying on ADB past first deployment: ADB (this script,
+# install_dropbear.sh) is how a device gets SSH access in the first place,
+# and once it has that, later work should not need ADB - or even USB - at
+# all. This matters even more once a device runs AWTRIX instead of the
+# stock firmware: AWTRIX has no network ADB (no port 5555) at all, so this
+# first-deployment IP capture becomes the ONLY way to learn it, not just a
+# convenience. Best-effort only - failing to learn the IP still writes
+# DEVICE (this run's ADB access still works), it just leaves DEVICE_IP for
+# the existing manual-entry prompt in main() below to fill in by hand.
 #
 # Skips itself entirely if DEVICE (an explicit ADB serial - USB, or an
 # already-established connection) is already configured - it always wins
-# over DEVICE_IP in require_device() anyway, so discovering an IP in that
-# case would be pointless.
+# over DEVICE_IP in require_device() anyway, so discovering anything in
+# that case would be pointless.
 #
 # If dist/tc002-discover has not been built yet, asks before building it
 # (../build_tc002-discover.sh - runs in a separate Alpine container, see
@@ -32,19 +55,28 @@ usage()
 Usage: discover_device.sh [--config FILE] [--timeout SECONDS]
                            [--serial S | --mac M | --name N] [--ip ADDRESS]
 
-Runs dist/tc002-discover (building it first, after asking, if not present
-yet) to find the TC002(s) on the local network, then writes the one
-found's IP and hostname into DEVICE_IP=/DEVICE_HOSTNAME= in the config
-file (created from config/tc002-tools.conf.example if it does not exist
-yet). Every other install/*.sh script picks DEVICE_IP up automatically
-via load_config(); DEVICE_HOSTNAME is informational only. Does nothing if
-DEVICE is already configured - an explicit ADB serial always wins over
+First checks for an already-connected ADB device (USB, or an existing
+session) via a plain "adb devices" - instant, no timeout. If found, writes
+DEVICE=<serial> into the config, and also tries to learn the device's own
+network IP (via "ifconfig", no guessing at interface names) to write
+as DEVICE_IP too - so SSH-based scripts (tests/nginx/run_test.sh,
+tests/test_device_access.sh, ...) can use it without needing ADB at all
+afterward. Only if no USB device is found does this fall back to
+dist/tc002-discover (building it first, after asking, if not present yet)
+to find the TC002(s) on the local network instead, writing the one found's
+IP and hostname into DEVICE_IP=/DEVICE_HOSTNAME=. Config file created from
+config/tc002-tools.conf.example if it does not exist yet. Every other
+install/*.sh script picks DEVICE/DEVICE_IP up automatically via
+load_config(); DEVICE_HOSTNAME is informational only. Does nothing at all
+if DEVICE is already configured - an explicit ADB serial always wins over
 DEVICE_IP anyway (see require_device() in common.sh).
 
-Always runs discovery with --all: if more than one TC002 answers, this
-refuses to guess which one you meant and lists what it found instead -
+Network discovery always runs with --all: if more than one TC002 answers,
+this refuses to guess which one you meant and lists what it found instead -
 re-run with --serial/--mac/--name to pick one (passed straight through to
-tc002-discover; see its own --help).
+tc002-discover; see its own --help). More than one USB/already-connected
+ADB device gets the same treatment - set DEVICE in the config by hand to
+pick one.
 
 If discovery finds nothing at all - expected from WSL, whose NAT
 networking cannot receive the TC002's UDP broadcast, see
@@ -121,6 +153,7 @@ skip_if_device_already_set()
 
   if [ -n "$DEVICE" ]; then
     log "DEVICE already set in ${CONFIG_FILE} (${DEVICE}); skipping discovery"
+    log "current config: DEVICE=${DEVICE} DEVICE_IP=${DEVICE_IP:-<not set>} DEVICE_HOSTNAME=${DEVICE_HOSTNAME:-<not set>}"
     exit 0
   fi
 }
@@ -266,6 +299,115 @@ write_device_info()
   log "set DEVICE_IP=${ip} DEVICE_HOSTNAME=${hostname} in ${CONFIG_FILE}"
 }
 
+# Parallel to write_device_info() above, but for DEVICE (an ADB serial)
+# instead of DEVICE_IP/DEVICE_HOSTNAME - the USB-discovery path below
+# writes both, one call each.
+write_device_serial()
+{
+  local serial="$1"
+  local example="${REPO_ROOT}/config/tc002-tools.conf.example"
+
+  if [ ! -f "$CONFIG_FILE" ]; then
+    [ -f "$example" ] || die "not found: ${example}"
+    cp "$example" "$CONFIG_FILE"
+    log "created ${CONFIG_FILE} from ${example}"
+  fi
+
+  if grep -q '^DEVICE=' "$CONFIG_FILE"; then
+    sed -i "s/^DEVICE=.*/DEVICE=${serial}/" "$CONFIG_FILE"
+  else
+    printf 'DEVICE=%s\n' "$serial" >>"$CONFIG_FILE"
+  fi
+
+  log "set DEVICE=${serial} in ${CONFIG_FILE}"
+}
+
+# Tries to learn the device's own network IP while connected over ADB
+# (USB or otherwise), via "ifconfig" - confirmed directly against a real
+# device (2026-09-30): this device's shell has no "ip" command at all,
+# only the older BusyBox/net-tools-style "ifconfig" - an earlier version
+# of this function tried "ip route get 1.1.1.1" first and it silently
+# found nothing every time, not because there was no route but because
+# the command itself does not exist here. Takes the first "inet addr:"
+# that is not the loopback interface's own 127.0.0.1 - this device only
+# ever has one real network interface (its WiFi) under normal operation,
+# so "the first one that is not loopback" is reliably the right one,
+# without needing to guess an interface name (wlan0 vs eth0 vs ...) or
+# depend on Android-specific getprop keys. Prints the IP and returns 0 on
+# success; returns 1 (never dies) if the device has no address yet (no
+# WiFi configured/connected, or ifconfig itself is missing) - the caller
+# falls back to DEVICE alone in that case.
+learn_ip_via_adb()
+{
+  local serial="$1"
+  local output ip
+
+  output="$(adb -s "$serial" shell ifconfig 2>/dev/null)" || return 1
+  ip="$(echo "$output" | grep -o 'inet addr:[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}' | grep -v ':127\.' | sed -n '1p' | cut -d: -f2)"
+
+  [ -n "$ip" ] || return 1
+
+  printf '%s' "$ip"
+}
+
+# Checks for a USB (or otherwise already-established) ADB connection
+# before ever trying network discovery - see this file's own top comment
+# for why USB-first, and why this also tries to learn/store the device's
+# network IP while it has the chance. Only ever considers a line whose
+# state is exactly "device" (fully authorized and ready) - "unauthorized"
+# (accept the RSA key prompt on the device screen first) and "offline"
+# both need a human to actually look at the device, not a silent pick.
+# Refuses to guess between more than one, the same discipline discover()
+# below already applies to more than one network device found. Returns 1
+# (falls through to network discovery) if none are ready, or adb is not
+# even installed.
+try_usb()
+{
+  if ! command -v adb >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local output serial state
+  local -a found=()
+
+  output="$(adb devices 2>&1)" || true
+
+  while read -r serial state
+  do
+    [ -n "$serial" ] || continue
+    [ "$state" = "device" ] || continue
+    found+=("$serial")
+  done < <(echo "$output" | tail -n +2)
+
+  if [ "${#found[@]}" -eq 0 ]; then
+    return 1
+  fi
+
+  if [ "${#found[@]}" -gt 1 ]; then
+    log "found ${#found[@]} ADB devices already connected - refusing to guess which one to configure:"
+
+    local s
+    for s in "${found[@]}"
+    do
+      log "  - ${s}"
+    done
+
+    die "more than one ADB device found; set DEVICE in ${CONFIG_FILE} by hand to pick one"
+  fi
+
+  local serial_found="${found[0]}"
+  log "found ADB device ${serial_found} already connected (USB or an existing session) - using it directly, skipping network discovery"
+  write_device_serial "$serial_found"
+
+  local ip
+  if ip="$(learn_ip_via_adb "$serial_found")"; then
+    write_device_info "$ip" ""
+    log "also learned network IP ${ip} from the USB connection - SSH-based scripts can use it without ADB from now on"
+  else
+    log "could not learn a network IP from the USB connection (no route yet - is WiFi connected on the device?) - set DEVICE_IP in ${CONFIG_FILE} by hand once you know it, or re-run this script once the device is online"
+  fi
+}
+
 # A dotted-quad shape check only, not full IPv4 validation (each octet in
 # range, etc.) - the real validation is whatever install script runs next
 # doing its own "adb connect" via require_device(); duplicating that here
@@ -344,6 +486,10 @@ main()
 
   if [ -n "$IP_HINT" ]; then
     use_ip_hint "$IP_HINT"
+    return
+  fi
+
+  if try_usb; then
     return
   fi
 

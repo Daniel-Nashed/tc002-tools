@@ -23,11 +23,6 @@ source "${SCRIPT_DIR}/common.sh"
 CONFIG_FILE="${REPO_ROOT}/config/tc002-tools.conf"
 DEVICE_OVERRIDE=""
 
-# kilo/gzip/nshbox today - add a new persistent, single-binary tool here
-# (and to deployment_mode_for() in common.sh) rather than writing another
-# install_<tool>.sh.
-SIMPLE_TOOLS="kilo gzip nshbox"
-
 usage()
 {
   cat <<EOF

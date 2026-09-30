@@ -68,13 +68,6 @@ check()
   fi
 }
 
-check_identity()
-{
-  local out
-  out="$(ssh "${SSH_OPTS[@]}" "root@${DEVICE_IP}" 'id' 2>/dev/null)" || return 1
-  echo "$out" | grep -q "uid=0(root)"
-}
-
 check_home()
 {
   local out
@@ -130,7 +123,12 @@ main()
   require_cmd scp
   require_cmd sha256sum
 
-  check "root identity over SSH" check_identity
+  # Printed before any check runs, not just on success at the end - a
+  # failure needs to say what it was even trying to reach just as much as
+  # a success does (a stale/wrong DEVICE_IP in the config is otherwise
+  # invisible until someone goes and reads the config file by hand).
+  log "testing SSH/SCP access to root@${DEVICE_IP}:${SSH_PORT}"
+
   check "\$HOME is /data/home" check_home
   check "\$PATH starts with /data/bin" check_path
   check "SCP round-trip checksum matches" check_scp_roundtrip

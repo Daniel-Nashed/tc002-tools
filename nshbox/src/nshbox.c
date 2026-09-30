@@ -105,6 +105,8 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <pwd.h>
+#include <grp.h>
 #ifndef NSHBOX_NO_CHECKSUMS
 #include <mbedtls/version.h>
 #include <mbedtls/md5.h>
@@ -3861,13 +3863,16 @@ static int cmd_stat(int argc, char **argv)
 /* Options shared by head and tail, GNU spellings: -n N / -nN / --lines=N /
  * -N (lines), -c N / -cN / --bytes=N (bytes), -q/--quiet/--silent and
  * -v/--verbose (file headers off/on). tail alone also takes +N after -n/-c
- * (start at line/byte N instead of counting from the end). Not supported:
- * size suffixes (k, M ...), head's "-n -N" (all but the last N), tail -f. */
+ * (start at line/byte N instead of counting from the end), and -f/--follow
+ * (see tail_follow() below - a 100ms poll loop, not inotify: simpler to
+ * reason about). Not supported: size suffixes (k, M ...), head's "-n -N"
+ * (all but the last N), tail -f on stdin or more than one file at once. */
 typedef struct {
     int  bytes;         /* -c: count is bytes, not lines */
     int  from_start;    /* tail -n +N / -c +N */
     int  quiet;
     int  verbose;
+    int  follow;        /* tail -f/--follow */
     long count;
     int  first_file;    /* index of the first file argument in argv */
 } headtail_opts_t;
@@ -3922,6 +3927,8 @@ static int parse_headtail(int argc, char **argv, int is_tail, headtail_opts_t *o
         } else if (!strcmp(a, "-v") || !strcmp(a, "--verbose")) {
             o->verbose = 1;
             o->quiet = 0;
+        } else if (is_tail && (!strcmp(a, "-f") || !strcmp(a, "--follow"))) {
+            o->follow = 1;
         } else if (!strncmp(a, "--lines=", 8)) {
             o->bytes = 0;
             if (headtail_number(a + 8, is_tail, o) != 0)
@@ -4139,6 +4146,60 @@ static int tail_stream(FILE *f, long count)
     return rc;
 }
 
+/* tail -f: after the initial dump, poll the file's size every 100 ms and
+ * print whatever was appended since - runs until killed (Ctrl-C). Plain
+ * polling, not inotify: simpler to reason about on a musl/BusyBox target.
+ * 100 ms (not a full second) so it still feels responsive for interactive
+ * log-watching - an fstat() ten times a second costs nothing worth
+ * measuring on any Linux system, embedded or not. If the file shrinks
+ * (rotated/truncated in place, not renamed - this has no way to notice a
+ * rename) it re-reads from the new beginning, same as GNU tail's default
+ * behavior. */
+static int tail_follow(FILE *f)
+{
+    long pos = ftell(f);
+    struct timespec poll_interval;
+
+    poll_interval.tv_sec = 0;
+    poll_interval.tv_nsec = 100000000L; /* 100 ms */
+
+    if (pos < 0) {
+        perror("tail");
+        return 1;
+    }
+
+    for (;;) {
+        struct stat st;
+
+        if (fstat(fileno(f), &st) != 0) {
+            perror("tail");
+            return 1;
+        }
+
+        if (st.st_size < pos) {
+            pos = 0;
+            if (fseek(f, 0, SEEK_SET) != 0) {
+                perror("tail");
+                return 1;
+            }
+        }
+
+        if (st.st_size > pos) {
+            char buf[4096];
+            size_t n;
+
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+                fwrite(buf, 1, n, stdout);
+
+            fflush(stdout);
+            clearerr(f);
+            pos = ftell(f);
+        }
+
+        nanosleep(&poll_interval, NULL);
+    }
+}
+
 static int headtail_stream(FILE *f, const headtail_opts_t *o, int is_tail)
 {
     if (!is_tail)
@@ -4163,13 +4224,18 @@ static int headtail_run(int argc, char **argv, int is_tail)
 
     if (parse_headtail(argc, argv, is_tail, &o) != 0) {
         if (is_tail)
-            fprintf(stderr, "Usage: nshbox tail [-n [+]N | -N | -c [+]N] [-q | -v] [file ...]\n");
+            fprintf(stderr, "Usage: nshbox tail [-n [+]N | -N | -c [+]N] [-f] [-q | -v] [file ...]\n");
         else
             fprintf(stderr, "Usage: nshbox head [-n N | -N | -c N] [-q | -v] [file ...]\n");
         return 1;
     }
 
     nfiles = argc - o.first_file;
+
+    if (o.follow && (nfiles != 1 || strcmp(argv[o.first_file], "-") == 0)) {
+        fprintf(stderr, "tail: -f needs exactly one file (not stdin, not more than one)\n");
+        return 1;
+    }
 
     if (nfiles == 0) {
         if (o.verbose)
@@ -4195,6 +4261,9 @@ static int headtail_run(int argc, char **argv, int is_tail)
 
         if (headtail_stream(f, &o, is_tail) != 0)
             rc = 1;
+
+        if (o.follow)
+            return tail_follow(f);
 
         if (!is_stdin)
             fclose(f);
@@ -4816,6 +4885,121 @@ static int cmd_hostname(int argc, char **argv)
         freeaddrinfo(res);
     }
 
+    return 0;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* id                                                                  */
+/* ------------------------------------------------------------------ */
+
+/* Prints "N" or "N(name)" for a uid/gid - falls back to the bare number
+ * if there is no matching /etc/passwd or /etc/group entry, same as real
+ * "id" does. Matters here specifically because /etc/passwd/group are not
+ * guaranteed to exist yet on a freshly-booted device (setup_etc.sh lays
+ * them down - see docs/device_layout.md) - this must never crash or print
+ * garbage before that has happened, just fall back to numeric. */
+static void id_print_user(uid_t uid)
+{
+    struct passwd *pw = getpwuid(uid);
+
+    if (pw)
+        printf("%lu(%s)", (unsigned long)uid, pw->pw_name);
+    else
+        printf("%lu", (unsigned long)uid);
+}
+
+static void id_print_group(gid_t gid)
+{
+    struct group *gr = getgrgid(gid);
+
+    if (gr)
+        printf("%lu(%s)", (unsigned long)gid, gr->gr_name);
+    else
+        printf("%lu", (unsigned long)gid);
+}
+
+/* No username argument, no -n - just "who am I", the one thing every
+ * caller of this actually needs (this device has no real multi-user
+ * environment to look anyone else up in - see docs/device_layout.md).
+ * -u/-g print just the bare effective uid/gid (no name, no trailing
+ * newline suppressed - matches real "id -u"/"id -g", the common
+ * "if [ "$(id -u)" = 0 ]" style check), and are mutually exclusive with
+ * each other, same as real "id". Full output: euid/egid are only printed
+ * when they differ from uid/gid, matching real "id"'s own behavior;
+ * groups= falls back to the primary gid alone if getgroups() reports
+ * nothing, since "id" never prints an empty groups= list. */
+static int cmd_id(int argc, char **argv)
+{
+    uid_t uid, euid;
+    gid_t gid, egid;
+    gid_t groups[64];
+    int ngroups;
+    int i;
+    int only_uid = 0, only_gid = 0;
+
+    for (i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-u")) {
+            only_uid = 1;
+        } else if (!strcmp(argv[i], "-g")) {
+            only_gid = 1;
+        } else {
+            fprintf(stderr, "Usage: nshbox id [-u | -g]\n");
+            return 2;
+        }
+    }
+
+    if (only_uid && only_gid) {
+        fprintf(stderr, "id: cannot print only user and only group ID\n");
+        return 2;
+    }
+
+    uid = getuid();
+    euid = geteuid();
+    gid = getgid();
+    egid = getegid();
+
+    if (only_uid) {
+        printf("%lu\n", (unsigned long)euid);
+        return 0;
+    }
+
+    if (only_gid) {
+        printf("%lu\n", (unsigned long)egid);
+        return 0;
+    }
+
+    printf("uid=");
+    id_print_user(uid);
+
+    if (euid != uid) {
+        printf(" euid=");
+        id_print_user(euid);
+    }
+
+    printf(" gid=");
+    id_print_group(gid);
+
+    if (egid != gid) {
+        printf(" egid=");
+        id_print_group(egid);
+    }
+
+    ngroups = getgroups(sizeof(groups) / sizeof(groups[0]), groups);
+
+    printf(" groups=");
+
+    if (ngroups <= 0) {
+        id_print_group(gid);
+    } else {
+        for (i = 0; i < ngroups; i++) {
+            if (i > 0)
+                putchar(',');
+            id_print_group(groups[i]);
+        }
+    }
+
+    putchar('\n');
     return 0;
 }
 
@@ -11280,6 +11464,7 @@ static int cmd_ldd(int argc, char **argv)
 
 
 static int cmd_install(int argc, char **argv);
+static int compare_command_names(const void *a, const void *b);
 
 static const command_t commands[] = {
     { "sysinfo",  cmd_sysinfo,  "Show system/CPU/memory information [--json]" },
@@ -11299,7 +11484,7 @@ static const command_t commands[] = {
     { "file",     cmd_file,     "Identify file type (-b brief, -L follow links)" },
     { "stat",     cmd_stat,     "Show file information [--json]" },
     { "head",     cmd_head,     "Show first lines/bytes (-n N, -N, -c N, -q, -v)" },
-    { "tail",     cmd_tail,     "Show last lines/bytes (-n [+]N, -N, -c [+]N, -q, -v)" },
+    { "tail",     cmd_tail,     "Show last lines/bytes (-n [+]N, -N, -c [+]N, -f follow, -q, -v)" },
     { "wc",       cmd_wc,       "Count lines/words/bytes (-lwc)" },
     { "sort",     cmd_sort,     "Sort lines (-r reverse, -n numeric, -u unique)" },
     { "tee",      cmd_tee,      "Copy stdin to stdout/files (-a)" },
@@ -11326,6 +11511,7 @@ static const command_t commands[] = {
     { "json",     cmd_json,     "Pretty-print JSON, 2-space indent [file]" },
     { "ldd",      cmd_ldd,      "List a binary's shared library dependencies [--json]" },
     { "hostname", cmd_hostname, "Print the system hostname (-f fully-qualified)" },
+    { "id",       cmd_id,       "Print the current user/group identity (-u uid only, -g gid only)" },
     { "dig",      cmd_dig,      "DNS lookup [--json] [name] [A|CNAME|MX|TXT|PTR] | -x ip (reverse)" },
     { "nslookup", cmd_nslookup, "DNS lookup [--json] [-type=A|CNAME|MX|TXT|PTR] name|ip (ip = reverse)" },
     { "netcat",   cmd_netcat,   "TCP/UNIX socket connect or listen-once, relays stdin/stdout - see 'nshbox netcat' with no args" },
@@ -11350,6 +11536,8 @@ static int cmd_install(int argc, char **argv)
     int rc = 0;
     int i;
     const command_t *cmd;
+    const command_t *sorted[sizeof(commands) / sizeof(commands[0]) - 1];
+    size_t count = 0;
 
     /* -q added after a real complaint (2026-09-13): this runs on every
      * single deploy AND every device boot (see runtime/init.sh and
@@ -11392,13 +11580,33 @@ static int cmd_install(int argc, char **argv)
     }
     *base++ = '\0';
 
-    /* The symlinks live beside nshbox, so a relative target is enough. */
+    /* Sorted alphabetically for the same "easy scanning" reason usage()
+     * sorts its own command listing (see compare_command_names() below) -
+     * this prints 40+ [OK]/[NEW]/[SKIP] lines on every deploy and every
+     * boot, and finding one specific command's status in source-file
+     * (thematically grouped) order means reading the whole list.
+     *
+     * "serve" is deliberately excluded, same as "install" - it starts a
+     * persistent, long-running network daemon, unlike every other applet
+     * here (one-shot, reads/reports and exits), so it should never be a
+     * bare command name sitting on PATH where it could be run by
+     * accident. Always invoked explicitly as "nshbox serve", never
+     * installed as its own /data/bin/serve symlink. */
     for (cmd = commands; cmd->name; cmd++) {
+        if (strcmp(cmd->name, "install") == 0 || strcmp(cmd->name, "serve") == 0)
+            continue;
+
+        sorted[count++] = cmd;
+    }
+
+    qsort(sorted, count, sizeof(sorted[0]), compare_command_names);
+
+    /* The symlinks live beside nshbox, so a relative target is enough. */
+    for (i = 0; i < (int)count; i++) {
         char linkpath[PATH_MAX];
         struct stat st;
 
-        if (strcmp(cmd->name, "install") == 0)
-            continue;
+        cmd = sorted[i];
 
         if (snprintf(linkpath, sizeof(linkpath), "%s/%s", dir, cmd->name) >=
                 (int)sizeof(linkpath)) {

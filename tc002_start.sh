@@ -5,8 +5,9 @@
 # Finds the device (this project's own tc002-discover, unless --device is
 # given - the IP may have changed since last time) and starts Dropbear
 # over "adb shell". Does not install or push anything - use
-# ./tc002_setup.sh instead for first-time provisioning, or to pick up
-# newly-built components.
+# ./tc002_setup.sh instead for first-time provisioning (or a forced full
+# reinstall), or ./tc002_update.sh to push newly-built tool binaries once
+# SSH is already working.
 #
 # Usage:
 #   ./tc002_start.sh                       # find the device and start the stack

@@ -214,6 +214,34 @@ configure_and_build()
   # old algorithms altogether (so e.g. "no-md2" may no longer exist): each
   # name is checked against the Configure file of THIS version first, and an
   # unknown one is skipped with a log line instead of failing the build.
+  #
+  # Second pass (2026-09-29), found by grepping this exact pinned version's
+  # real Configure file for every disable-able option and cross-checking
+  # against what a TLS-1.2/1.3-only, AEAD-cipher, RSA/ECDSA server on this
+  # specific device actually uses - see whoami/README.md for the full
+  # reasoning behind each group:
+  #   unused KDF family (SSH/SNMP/Kerberos/ANSI-X9 - nothing a TLS server
+  #     needs): sshkdf sskdf x942kdf x963kdf kbkdf krb5kdf hmac-drbg-kdf
+  #     pvkkdf snmpkdf
+  #   legacy/unused algorithms, same category as the first pass above:
+  #     dsa des md4 blake2 cmac scrypt argon2 rmd160 siphash siv ocb
+  #   dead weight given THIS device specifically: ktls (the TC002's 4.9
+  #     kernel predates kernel TLS offload support entirely - this code
+  #     can never activate), egd (no one uses an entropy-gathering daemon
+  #     over /dev/urandom), dgram/srtp/srtpkdf (DTLS is already gone),
+  #     ech (Encrypted ClientHello - nothing here negotiates it),
+  #     nextprotoneg (obsoleted by ALPN), multiblock, gost,
+  #     integrity-only-ciphers, trace, uplink (Windows-only)
+  # Deliberately NOT included here:
+  #   "deprecated" - the single biggest remaining lever, but also the one
+  #     genuinely at risk of breaking something nginx or the CLI still
+  #     calls; test that one on its own, separately, not bundled into
+  #     this already-large batch.
+  #   "filenames" - every real consumer here (whoami_openssl.c's
+  #     SSL_CTX_use_certificate_file/use_PrivateKey_file, and OpenSSL's
+  #     own cert/key/CA-bundle loading generally) loads by filename; keep
+  #     this one enabled unless every caller has actually been checked
+  #     against it first.
   local -a trim_args=()
   local trim_option
 
@@ -221,7 +249,11 @@ configure_and_build()
                      cms ct ts cmp ocsp \
                      idea seed rc2 rc4 rc5 bf cast md2 mdc2 whirlpool \
                      sm2 sm3 sm4 camellia aria ec2m weak-ssl-ciphers \
-                     tls1 tls1_1
+                     tls1 tls1_1 \
+                     sshkdf sskdf x942kdf x963kdf kbkdf krb5kdf hmac-drbg-kdf pvkkdf snmpkdf \
+                     dsa des md4 blake2 cmac scrypt argon2 rmd160 siphash siv ocb \
+                     ktls egd dgram srtp srtpkdf ech nextprotoneg multiblock gost \
+                     integrity-only-ciphers trace uplink
   do
     if grep -qw -- "$trim_option" "${SRC_DIR}/Configure"; then
       trim_args+=("no-${trim_option}")

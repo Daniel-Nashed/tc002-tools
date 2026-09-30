@@ -34,7 +34,7 @@ can also be left out of a build entirely (`make CHECKSUMS=0`, see "Build").
 | `nshbox file [-bL] file ...` | no | Identify file type, with real ELF detail - see below. |
 | `nshbox stat [--json\|--JSON] <file> [...]` | no | Size, mode, owner, link count, mtime, via `lstat()` (or a JSON array, compact or pretty) - see below. |
 | `nshbox head [-n N \| -N \| -c N] [-q \| -v] [file ...]` | no | First N lines (default 10) or bytes. GNU spellings: `-20`, `-n20`, `--lines=20`, `-c 100`, `--bytes=100`. With several files each gets a `==> name <==` header (`-q` off, `-v` always). `-` is stdin. |
-| `nshbox tail [-n [+]N \| -N \| -c [+]N] [-q \| -v] [file ...]` | no | Last N lines (default 10) or bytes, fixed-size ring buffer (`-c` is capped at 16 MiB); `-n +N` / `-c +N` start at line/byte N instead. Same options and headers as `head`. Not implemented: `-f`, size suffixes (`k`, `M`), `head -n -N`. |
+| `nshbox tail [-n [+]N \| -N \| -c [+]N] [-f] [-q \| -v] [file ...]` | no | Last N lines (default 10) or bytes, fixed-size ring buffer (`-c` is capped at 16 MiB); `-n +N` / `-c +N` start at line/byte N instead. Same options and headers as `head`. `-f`/`--follow` polls every 100 ms for appended data and prints it (Ctrl-C to stop); needs exactly one real file, not stdin or several files. Not implemented: size suffixes (`k`, `M`), `head -n -N`. |
 | `nshbox wc [-lwc] [file ...]` | no | Line/word/byte counts. |
 | `nshbox sort [-rnu] [file ...]` | no | Sort lines; `-r` reverse, `-n` numeric, `-u` unique. Multiple files are concatenated, not reported separately. |
 | `nshbox tee [-a] [file ...]` | **yes** | Copy stdin to stdout and to each named file (`-a` appends). |
@@ -59,6 +59,7 @@ can also be left out of a build entirely (`make CHECKSUMS=0`, see "Build").
 | `nshbox json [file]` | no | Pretty-print JSON, 2-space indent - reads stdin or a file; also available as `--JSON`/`--Json` on any command above that supports `--json` - see below. |
 | `nshbox ldd [--json\|--JSON] [file ...]` | no | List a binary's shared library dependencies (or a JSON array, compact or pretty; one file only with `--json`) - see below. |
 | `nshbox hostname [-f]` | no | Print the system hostname; `-f` resolves it to a fully-qualified name via `/etc/hosts`/DNS. |
+| `nshbox id [-u \| -g]` | no | Print the current user/group identity - `uid=N(name) gid=N(name) groups=N(name)[,N(name)...]`, `euid=`/`egid=` only shown if they differ from `uid`/`gid`. `-u`/`-g` print just the bare effective uid/gid (mutually exclusive), e.g. `id -u`. No username argument or `-n`  - just "who am I", falling back to the bare number if `/etc/passwd`/`/etc/group` have no matching entry yet. |
 | `nshbox dig [--json\|--JSON] <name> [A\|CNAME\|MX\|TXT\|PTR]` / `dig -x <ip>` | no | DNS lookup, `dig`-style simplified ANSWER SECTION output (or a JSON array, compact or pretty); `-x` = reverse lookup, IP to name - see below. |
 | `nshbox nslookup [--json\|--JSON] [-type=A\|CNAME\|MX\|TXT\|PTR] <name\|ip>` | no | DNS lookup, `nslookup`-style output (or a JSON array, compact or pretty); an IP address is looked up in reverse - see below. |
 | `nshbox netcat\|nc <host> <port>` / `-l <port>` / `-U <path>` / `-l -U <path>` | no | Connect or listen-once, TCP or a UNIX socket, relay stdin/stdout - see below. |
@@ -917,11 +918,13 @@ nshbox ldd --json /data/bin/nshbox
 nshbox install
 ```
 
-Creates a symlink for every command above (except `install` itself) in the same directory as the `nshbox` binary
-itself - resolved via `/proc/self/exe`, not `argv[0]`, so this works correctly no matter how `nshbox install` was
-invoked. Each symlink is relative (`ps -> nshbox`, not an absolute path), so the whole toolbox keeps working if the
-directory it lives in is ever moved. Output is one line per command, just the name (not the full path, and not the
-symlink target - every symlink points at `nshbox`, so repeating that on every line would just be noise):
+Creates a symlink for every command above (except `install` itself, and `serve` - see below) in the same directory
+as the `nshbox` binary itself - resolved via `/proc/self/exe`, not `argv[0]`, so this works correctly no matter how
+`nshbox install` was invoked. Each symlink is relative (`ps -> nshbox`, not an absolute path), so the whole toolbox
+keeps working if the directory it lives in is ever moved. Output is one line per command, alphabetically sorted for
+easy scanning (`commands[]` itself stays grouped by theme in the source - only the display order differs here, same
+as `nshbox --help`'s listing), just the name (not the full path, and not the symlink target - every symlink points
+at `nshbox`, so repeating that on every line would just be noise):
 
 ```text
 [NEW]  ps
@@ -943,6 +946,10 @@ Safety properties:
 never hidden. Added because this project runs `install -f`/`install -fq` defensively on every deploy *and* every
 device boot (see `install/common.sh`'s `post_install_hook_for()` and `runtime/init.sh`), and printing 30+ unchanged
 `[OK]` lines every single time is pure noise once nothing is actually changing.
+
+**`serve` never gets a symlink**, deliberately: it starts a persistent, long-running network daemon, unlike every
+other applet here (one-shot - reads/reports and exits), so it should never be a bare command name sitting on PATH
+where it could be started by accident. Always invoke it explicitly as `nshbox serve`.
 
 **This installs into `/data/bin` when `nshbox` itself is installed there** (see
 [../docs/device_layout.md](../docs/device_layout.md)), which is first in Dropbear's compiled-in `PATH` (see
