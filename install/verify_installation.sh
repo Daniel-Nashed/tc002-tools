@@ -21,11 +21,12 @@ CONFIG_FILE="${REPO_ROOT}/config/tc002-tools.conf"
 DEVICE_OVERRIDE=""
 FAILED=0
 CHECK_ONLY=0
+WITH_VIM=0
 
 usage()
 {
   cat <<'EOF'
-Usage: verify_installation.sh [--device SERIAL] [--config FILE] [--with-openssl] [--check]
+Usage: verify_installation.sh [--device SERIAL] [--config FILE] [--with-openssl] [--with-vim] [--check]
 
 Checks that dropbear/scp/dropbearkey/dbclient/dropbearconvert/init.sh/
 sshd.sh/setup_etc.sh/nshbox/kilo/gzip/ncdu on the device match the
@@ -42,6 +43,14 @@ on-device. Exits non-zero if anything fails.
                        uses this to decide whether a device is already
                        fully provisioned and the rest of the pipeline can
                        be skipped, see its own -y/--force flag).
+  --with-vim        Also check vim/vi/edit (optional, see install_vim.sh)
+                       - off by default and NOT implied by
+                       dist/vim existing: vim is a separate, deliberate,
+                       per-device deployment decision (install_vim.sh is
+                       never run automatically by deploy.sh), so "was it
+                       built" is not the same question as "should this
+                       device have it" the way it is for every other
+                       optional component here.
   --device SERIAL   ADB device serial (overrides DEVICE from config).
   --config FILE     Config file (default: config/tc002-tools.conf).
   -h, --help        Show this help.
@@ -61,6 +70,10 @@ do
       ;;
     --with-openssl)
       export TC002_INSTALL_OPENSSL_CLI=1
+      shift
+      ;;
+    --with-vim)
+      WITH_VIM=1
       shift
       ;;
     --check)
@@ -213,6 +226,58 @@ verify_awtrix_autostart()
   verify_binary awtrix_autostart "${REPO_ROOT}/runtime/awtrix_autostart.sh" "autostart" "/data/awtrix-ng/state/autostart"
 }
 
+# vi/edit are a real file copy of whichever wrapper currently owns them,
+# not a symlink (install_binary() pushes runtime/kilo.sh or runtime/vim.sh
+# content directly, matching whichever install_tools.sh/install_vim.sh ran
+# last - see install_vim.sh's own comments on step order). Checked against
+# vim.sh only with --with-vim - NOT just because dist/vim happens to exist:
+# unlike every other optional component here, "was vim built" and "should
+# this specific device have it" are different questions (install_vim.sh is
+# never run automatically by deploy.sh - a deliberate, separate,
+# per-device decision, see its own comments), so build-artifact presence
+# alone would be the wrong signal. Without --with-vim, assumes kilo still
+# owns vi/edit, which is true for any device install_vim.sh was never
+# explicitly run against.
+verify_vim_or_kilo_wrapper()
+{
+  if [ "$WITH_VIM" -eq 1 ]; then
+    verify_binary vi-wrapper "${REPO_ROOT}/runtime/vim.sh" "vi"
+    verify_binary edit-wrapper "${REPO_ROOT}/runtime/vim.sh" "edit"
+  else
+    verify_binary vi-wrapper "${REPO_ROOT}/runtime/kilo.sh" "vi"
+    verify_binary edit-wrapper "${REPO_ROOT}/runtime/kilo.sh" "edit"
+  fi
+}
+
+# vim itself (optional, see install_vim.sh) - only with --with-vim (see
+# its own comment above for why build-artifact presence is not the right
+# signal here). Dies with a clear message, rather than silently skipping,
+# if --with-vim was given but dist/vim was never actually built - that
+# combination means the caller expected vim to be there and got the
+# config wrong, not "nothing to check".
+verify_vim()
+{
+  if [ "$WITH_VIM" -ne 1 ]; then
+    log "SKIP: vim not requested (pass --with-vim if install_vim.sh was run against this device)"
+    return
+  fi
+
+  if [ ! -f "${DIST_DIR}/vim" ]; then
+    die "--with-vim given but ${DIST_DIR}/vim not built - run ./build_vim.sh first"
+  fi
+
+  verify_binary vim "${DIST_DIR}/vim" "vim.bin"
+  verify_binary vim-wrapper "${REPO_ROOT}/runtime/vim.sh" "vim"
+  verify_binary vicfg "${REPO_ROOT}/runtime/vicfg.sh" "vicfg"
+
+  # defaults.vim is only checked for PRESENCE (verify_present, not
+  # verify_binary/checksum) - push_defaults_vim_if_missing() in
+  # install_vim.sh deliberately never overwrites it once it exists, so an
+  # admin's own edits mean its checksum will legitimately no longer match
+  # runtime/vim_defaults.vim, and that is correct, not a failure.
+  verify_present "vim defaults.vim" "${INSTALL_PREFIX}/share/vim/defaults.vim" 1
+}
+
 verify_present()
 {
   local label="$1"
@@ -276,13 +341,13 @@ main()
   verify_etc
   verify_binary nshbox
   verify_binary kilo
-  verify_binary vi-wrapper "${REPO_ROOT}/runtime/kilo.sh" "vi"
-  verify_binary edit-wrapper "${REPO_ROOT}/runtime/kilo.sh" "edit"
+  verify_vim_or_kilo_wrapper
   verify_binary gzip
   verify_binary ncdu "${DIST_DIR}/ncdu" "ncdu.bin"
   verify_binary ncdu-wrapper "${REPO_ROOT}/runtime/ncdu.sh" "ncdu"
   verify_on_demand
   verify_awtrix_autostart
+  verify_vim
   verify_present "authorized_keys" "${INSTALL_PREFIX}/home/.ssh/authorized_keys" 1
   verify_present "dropbear host key" "${INSTALL_PREFIX}/home/dropbear_ed25519_host_key" 0
   verify_present "ncdu terminfo (xterm-256color)" "${INSTALL_PREFIX}/share/terminfo/x/xterm-256color" 0

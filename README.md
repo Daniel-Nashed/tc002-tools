@@ -68,6 +68,17 @@ first use per tool - see [docs/device_layout.md](docs/device_layout.md#deploymen
 | **openssl**       | The OpenSSL CLI tool itself (`openssl` command), deployed as its own on-demand tool - separate from nginx's own vendored TLS backend above, built by the same `openssl/` component - see [openssl/README.md](openssl/README.md).                                  | `./build_all.sh --with-openssl`                                                            |
 | **7-Zip** (`7zz`) | Archive tool with broader format support than gzip (`.7z`, `.zip`, `.tar`, and more), better compression via LZMA2, and AES-256 archive encryption - see [7zip/README.md](7zip/README.md).                                                                        | `./build_all.sh --with-7zip`                                                               |
 
+### Optional, separately-deployed component
+
+Not built by default, and - unlike the compressed-on-demand components above - never pushed automatically by
+`deploy.sh`, even once built: not everyone wants the flash space spent on a second editor, so deploying it is its
+own deliberate, per-device decision, run separately. Persistent, not compressed-on-demand, despite the size, since
+`vi`/`edit` need to keep starting instantly.
+
+| Component | What it provides                                                                                                                                                                                                                                                                                  | How it's built and deployed                                        |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| **vim**   | Real, modal vi/vim editing (`--with-features=tiny`, ~1.4 MB fully static). Overwrites `vi`/`edit` to point at it instead of kilo once deployed; `vicfg` opens its settings file directly, never overwritten once it exists - see [docs/device_layout.md](docs/device_layout.md#vim). | `./build_vim.sh` (builds AND pushes it - see its own comments)     |
+
 ## Building
 
 ```sh

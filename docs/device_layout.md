@@ -228,6 +228,7 @@ the single source of truth; this table just mirrors it for human reference.
 | ncdu (+`ncdu.bin`, wrapper, terminfo)                  | persistent           | only 204 KB - smaller than curl/nginx by 5-16x, not worth the on-demand tier's own overhead; see `install_etc.sh` |
 | curl, nginx, openssl, 7zz                             | compressed-on-demand | genuinely larger, occasional use - 7zz is ~1.7 MB, closer to curl than any persistent tool here |
 | awtrix_autostart                                      | persistent           | startup-critical on an AWTRIX-flashed device - see "AWTRIX autostart" below |
+| vim (+`vim.bin`, wrapper, `vicfg`, `defaults.vim`)     | persistent           | OPTIONAL - ~1.4 MB static, but `vi`/`edit` need to start instantly; never deployed automatically, see "vim" below |
 | *(none yet)*                                          | ram                  | mechanism exists per-tool if ever needed - see below |
 
 The persistent, single-binary tools with nothing else special about them (`kilo`, `gzip`, `nshbox`) share one
@@ -334,6 +335,34 @@ exit 0
 The `/tmp/autostart.trace` line is deliberately minimal - just a timestamp on tmpfs, lost on reboot - kept only so
 a future boot-order question (e.g. "did this run before or after Wi-Fi came up?") is still answerable without
 adding real diagnostics back in.
+
+### vim
+
+OPTIONAL - not everyone wants the flash space spent on a second editor beyond kilo, so unlike
+every other optional component in this project, **building it does not imply deploying it**: `./build_vim.sh`
+builds AND pushes in one command (both steps run on the host - the build container has no path to the device at
+all), but it is never run by `deploy.sh` itself. See [`../build/build_vim.sh`](../build/build_vim.sh) for the full
+cross-compile story (`--with-features=tiny`, `--with-tlib=ncursesw` to work around a real vim cross-compile
+failure mode, static, ~1.4 MB stripped) and [`../install/install_vim.sh`](../install/install_vim.sh) for what
+gets pushed:
+
+- `INSTALL_PREFIX/bin/vim.bin` - the real binary.
+- `INSTALL_PREFIX/bin/vim` - [`../runtime/vim.sh`](../runtime/vim.sh), a thin wrapper setting `TERMINFO` (the same
+  entries already staged for ncdu - see above) and `VIMRUNTIME` before exec'ing `vim.bin`.
+- `INSTALL_PREFIX/bin/vi` and `INSTALL_PREFIX/bin/edit` - overwritten with the **same** wrapper, so both names
+  point at vim instead of kilo from then on. `install_tools.sh` installs kilo's own copies at these two paths;
+  `install_vim.sh` always wins if it has ever been run against a device, whichever runs more recently.
+- `INSTALL_PREFIX/bin/vicfg` - [`../runtime/vicfg.sh`](../runtime/vicfg.sh), a convenience shortcut that just
+  execs the `vim` wrapper against `defaults.vim` (below), so its exact path never needs to be remembered.
+- `INSTALL_PREFIX/share/vim/defaults.vim` - [`../runtime/vim_defaults.vim`](../runtime/vim_defaults.vim), pushed
+  the **first time only**. vim always tries to source `$VIMRUNTIME/defaults.vim` at startup when no user vimrc
+  exists, and with nothing there at all that fails outright ("E1187: Failed to source defaults.vim", confirmed
+  directly, 2026-09-30) - but this is deliberately not a copy of upstream vim's own defaults.vim (which assumes
+  `+syntax`/`+eval` and other features this tiny build lacks), so it starts empty and is meant to be edited
+  directly on the device (`vicfg`) rather than redeployed from the repo. `install_vim.sh` checks for it via output
+  text, not the ADB shell exit code (unreliable on this device - see `push_etc_override()`'s own comments in
+  `../install/common.sh`), and never overwrites it once present, so an admin's own edits survive every later
+  rebuild/redeploy of `vim.bin` itself.
 
 ### Trusted root CA bundle
 

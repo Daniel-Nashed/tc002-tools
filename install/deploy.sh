@@ -58,7 +58,16 @@ not itself need it), install_dropbear.sh, install_awtrix_autostart.sh
 init.sh on the device over "adb shell", so you can SSH in as soon as this
 command finishes). Anything not built yet is skipped with a log line, not
 an error - deploy.sh always installs everything that IS built, no flag
-needed to opt in. install_on_demand.sh skips itself entirely if nothing
+needed to opt in.
+
+vim (optional, see build_vim.sh) is deliberately NOT part of this -
+not everyone wants to spend the flash space on an editor beyond kilo.
+Even once built, it is never pushed by deploy.sh; run
+install/install_vim.sh yourself as its own, separate, deliberate step -
+see its own --help. It overwrites vi/edit to point at vim instead of kilo
+when you do.
+
+install_on_demand.sh skips itself entirely if nothing
 compressed-on-demand has been built yet; gzip (installed by
 install_tools.sh) comes before it since it's the decompressor every
 compressed-on-demand tool's wrapper depends on. Each step is itself

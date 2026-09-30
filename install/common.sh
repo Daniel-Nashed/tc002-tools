@@ -162,6 +162,12 @@ require_device()
 #                                                        network ADB is gone; installed by
 #                                                        install_awtrix_autostart.sh, skipped with
 #                                                        a log line on a non-AWTRIX device)
+# vim (+vim.bin, wrapper, defaults.vim)                 persistent - OPTIONAL, not
+#                                                        built by default (./build_vim.sh); ~1.4 MB
+#                                                        static but kept persistent, not
+#                                                        compressed-on-demand, since it owns
+#                                                        vi/edit and those need to start instantly;
+#                                                        see install_vim.sh
 #
 # tc002-discover is deliberately absent - not managed by this table at
 # all; it never touches the device (see its own README). No tool is
@@ -173,7 +179,7 @@ deployment_mode_for()
     dropbearmulti|dropbear|scp|dropbearkey|dbclient|dropbearconvert|init.sh|sshd.sh|setup_etc.sh)
       echo "persistent"
       ;;
-    nshbox|kilo|gzip|ncdu)
+    nshbox|kilo|gzip|ncdu|vim)
       echo "persistent"
       ;;
     curl|nginx|openssl|7zz)

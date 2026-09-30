@@ -16,11 +16,13 @@ Where each script runs: **host** is your own machine, **container** is one of th
 | ----------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `build_all.sh`                | host, then container            | Builds everything required (`--with-curl`/`--with-nginx`/`--with-openssl`/`--with-7zip` or `--all` add the opt-in tools; `--rebuild` forces). See [build_platform.md](build_platform.md).          |
 | `build_<name>.sh`             | host, then container            | One thin wrapper per component (`nshbox`, `kilo`, `gzip`, `ncdu`, `dropbear`, `curl`, `nginx`, `openssl`, `mbedtls`, `7zip`, `ca_bundle`): runs `build/build_<name>.sh` in the ARM musl container. |
+| `build_vim.sh`                | host, then container, then host | OPTIONAL - unlike every other `build_<name>.sh`, also pushes: builds in the container, then runs `install/install_vim.sh` on the host. See [device_layout.md](device_layout.md#vim). |
 | `build_tc002-discover.sh`     | host, then a native container   | Builds the host-side discovery tool in its own native Alpine container.                                                                                                                            |
 | `pull_build_image.sh`         | host                            | Pulls the published ARM build image for this checkout's inputs and tags it like a local build, so `build_all.sh` does not compile the cross compiler.                                              |
 | `verify.sh`                   | host, then container            | Checks `dist/` without a device: ARM EABI hard-float, fully static, stripped, no build-host paths, manifest present.                                                                               |
 | `tc002_setup.sh`              | host                            | Sets up a device from scratch over ADB (`install/deploy.sh`). See [manual_rollout.md](manual_rollout.md).                                                                                          |
 | `tc002_start.sh`              | host                            | Brings SSH back up on an already provisioned device, for example after a reboot: finds it again and starts Dropbear. Pushes nothing.                                                               |
+| `tc002_update.sh`             | host                            | Pushes updated tool binaries over SSH (not ADB) once a device already has it working: `install/update_tools.sh`. See [manual_rollout.md](manual_rollout.md).                                       |
 | `test_nshbox.sh`              | host, then the Ubuntu container | Builds and runs the nshbox functional tests against real GNU tools ([tests/nshbox](../tests/nshbox/README.md)).                                                                                    |
 | `test_build_nshbox_native.sh` | host, then a native container   | Builds nshbox for this host's platform into `dist/amd64/` or `dist/arm64/` and optionally runs it. Dev only, never deployed.                                                                       |
 | `push-release.sh`             | host                            | Writes `version.txt` from `nshbox/src/version.h`, then tags and pushes `v<version>`. See [releasing.md](releasing.md).                                                                             |
@@ -56,7 +58,9 @@ Where each script runs: **host** is your own machine, **container** is one of th
 | `install_tools.sh`               | Pushes the simple persistent tools: `nshbox` (plus its applet links), `kilo`, `gzip`.                                                   |
 | `install_etc.sh`                 | Pushes `setup_etc.sh`, the `/etc` overrides, the CA bundle, and `ncdu` with its terminfo.                                               |
 | `install_on_demand.sh`           | Pushes `on-demand.tar.gz`, the wrapper `on-demand-run`, and the links for `curl`, `nginx`, `7zz` (and `openssl` with `--with-openssl`). |
+| `update_tools.sh`                | **SSH, not ADB** - the update counterpart to `install_tools.sh`/`install_on_demand.sh` together, for a device that already has SSH working. Checksum-skips the on-demand archive if unchanged. See `tc002_update.sh`. |
 | `install_awtrix_autostart.sh`    | Pushes the AWTRIX autostart hook so Dropbear starts automatically at boot - AWTRIX-flashed devices only, skipped with a log line otherwise. See [device_layout.md](device_layout.md#awtrix-autostart). |
+| `install_vim.sh`                 | Pushes vim (optional, `--with-features=tiny`) and overwrites `vi`/`edit` to point at it instead of kilo - standalone, never run by `deploy.sh`. See [device_layout.md](device_layout.md#vim). |
 | `start.sh` / `start_dropbear.sh` | Find the device (`start.sh` only) and start Dropbear through `init.sh`. Used by `tc002_start.sh`.                                       |
 | `verify_installation.sh`         | Checks that what is on the device matches `dist/` (checksums, symlinks), and reports free memory.                                       |
 | `disable_adb.sh`                 | Pushes the ADB-retirement helper only; it never runs it. See [recovery.md](recovery.md).                                                |
@@ -75,6 +79,8 @@ Where each script runs: **host** is your own machine, **container** is one of th
 | `kilo.sh`          | Wrapper installed as both `vi` and `edit`.                                                                                   |
 | `disable_adb.sh`   | Stops `adbd`. Run it on the device on purpose, never from the deploy scripts.                                                |
 | `awtrix_autostart.sh` | AWTRIX's own autostart hook, installed as `/data/awtrix-ng/state/autostart` - calls `init.sh`. AWTRIX-flashed devices only, see [device_layout.md](device_layout.md#awtrix-autostart). |
+| `vim.sh`           | Wrapper installed as both `vim` and (overwriting kilo's copies) `vi`/`edit` - sets `TERMINFO`/`VIMRUNTIME`. Optional, see [device_layout.md](device_layout.md#vim). |
+| `vicfg.sh`         | Convenience shortcut: opens vim's `defaults.vim` directly via the `vim` wrapper. See [device_layout.md](device_layout.md#vim). |
 
 ### Tests
 
