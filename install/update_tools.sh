@@ -105,7 +105,15 @@ push_kilo_wrapper()
   fi
 
   local vim_check
-  vim_check="$(ssh_exec "[ -f ${INSTALL_PREFIX}/bin/vim.bin ] && echo yes" 2>&1 | tr -d '\r')"
+  # "|| true": ssh_exec's own exit status is the remote command's - "[ -f
+  # ... ] && echo yes" deliberately exits 1 when vim.bin is NOT there (the
+  # normal case on most devices), which is an expected "no" answer, not a
+  # real failure. Without this, that nonzero status propagates straight
+  # through the pipe (set -o pipefail) into this bare assignment and
+  # set -e silently aborts the whole script right here - confirmed as a
+  # real bug, 2026-09-30: push_update_script()/update_on_demand() below
+  # never ran on any device without vim deployed.
+  vim_check="$(ssh_exec "[ -f ${INSTALL_PREFIX}/bin/vim.bin ] && echo yes" 2>&1 | tr -d '\r')" || true
 
   if [ "$vim_check" = "yes" ]; then
     log "skipping vi/edit wrapper: vim is deployed on this device (install_vim.sh owns vi/edit here)"

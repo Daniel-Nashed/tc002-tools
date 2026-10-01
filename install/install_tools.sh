@@ -103,7 +103,13 @@ push_kilo_wrapper()
   fi
 
   local vim_check
-  vim_check="$(adb -s "$DEVICE" shell "[ -f ${INSTALL_PREFIX}/bin/vim.bin ] && echo yes" 2>&1 | tr -d '\r')"
+  # "|| true": see update_tools.sh's identical copy of this check for why -
+  # "adb shell" is documented elsewhere in this project as having an
+  # unreliable exit code on this device (see require_device()'s own
+  # comments), which may currently mask the same set -e/pipefail hazard
+  # ssh_exec's real, reliable exit-code propagation does not - not
+  # something safe to depend on either way.
+  vim_check="$(adb -s "$DEVICE" shell "[ -f ${INSTALL_PREFIX}/bin/vim.bin ] && echo yes" 2>&1 | tr -d '\r')" || true
 
   if [ "$vim_check" = "yes" ]; then
     log "skipping vi/edit wrapper: vim is deployed on this device (install_vim.sh owns vi/edit here)"
