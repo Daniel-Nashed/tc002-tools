@@ -539,6 +539,8 @@ nshbox wget https://example.com/file.tar.gz --hash <hex>          # same, algori
 nshbox wget https://example.com/file.tar.gz --sha256              # no <hex>: just compute and print it, don't verify
 nshbox wget https://example.com/file.tar.gz --hash                # same, bare --hash defaults to SHA-256
 nshbox wget https://self-signed.example.com/ -k                   # skip certificate verification
+nshbox wget https://api.example.com/file -H "Authorization: Bearer $TOKEN"
+                                                                    # extra request header (repeatable)
 ```
 
 Purpose-built - HTTPS(/HTTP) GET only, nothing else - **not a claim of compatibility with real wget or curl**, and
@@ -581,6 +583,14 @@ aliases from **both** rather than forcing one spelling:
 - **Quiet**: `-q`/`--quiet` (wget's own flag) and `-s`/`--silent` (curl's) all suppress the same three
   informational lines (redirect notices, "checksum OK", "saved ..."), never the ones that report a real failure -
   same "routine output off, real signal stays" philosophy `nshbox install -q` already uses.
+- **Extra headers**: `-H "Name: value"` (curl's own flag spelling - real wget has no direct equivalent), repeatable
+  up to 16 times, sent verbatim after the built-in `Host`/`User-Agent`/`Connection` headers and resent unchanged on
+  every redirect hop (same default behavior a real browser/curl/wget already has - nothing here strips anything
+  across a cross-origin redirect). The one place user-supplied text lands directly in the raw HTTP request this
+  file writes to the wire, so it is validated accordingly: must contain a `:` (not header-shaped otherwise), and
+  a literal CR/LF is rejected outright rather than stripped - letting one through would let a header *value* smuggle
+  additional headers or corrupt the request line. The primary use case this was added for: `-H "Authorization:
+  Bearer <token>"` against a token-protected endpoint.
 
 Relative redirects (`/path`, `//host/path`, and a plain `path` merged onto the current URL's own directory - RFC
 3986 section 5's practical cases) are resolved, not just rejected - confirmed directly, 2026-09-30, against a

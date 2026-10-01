@@ -29,6 +29,11 @@ WORK_DIR="${REPO_ROOT}/build/work"
 # scripts cannot drift apart on the path.
 MBEDTLS_INSTALL_DIR="${WORK_DIR}/mbedtls-install"
 
+# Where build_tweetnacl.sh installs tweetnacl.c/tweetnacl.h for
+# jwt-verify/build_arm.sh to consume - same reasoning as MBEDTLS_INSTALL_DIR
+# above.
+TWEETNACL_INSTALL_DIR="${WORK_DIR}/tweetnacl-install"
+
 # Where build_openssl.sh installs its shared libraries/headers, staged
 # under a "data/" and "etc/" layout matching exactly where they need to
 # land on the device (--prefix=/data --openssldir=/etc/ssl) - see
@@ -71,6 +76,7 @@ if [ "${TC002_TOOLCHAIN:-}" = "musl" ]; then
   TARGET_LDFLAGS_SIZE="-Wl,--gc-sections"
   WORK_DIR="${REPO_ROOT}/build/work-musl"
   MBEDTLS_INSTALL_DIR="${WORK_DIR}/mbedtls-install"
+  TWEETNACL_INSTALL_DIR="${WORK_DIR}/tweetnacl-install"
 fi
 
 log()

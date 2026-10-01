@@ -8105,25 +8105,40 @@ static int wget_read_line(wget_conn_t *c, char *buf, size_t cap)
 
 #define WGET_LINE_MAX 4096
 
+/* -H/--header (see cmd_wget()): a bounded list of caller-supplied extra
+ * request headers (e.g. "Authorization: Bearer <token>") - every other
+ * array/count pair in this file is similarly bounded rather than dynamic,
+ * same style. WGET_HEADER_MAX comfortably covers a real bearer token
+ * (this session's own test JWTs were all well under it). */
+#define WGET_MAX_HEADERS 16
+#define WGET_HEADER_MAX 1024
+
 typedef struct {
     int status;
     char location[2048];
     long content_length;   /* -1 = not given (read until close) */
 } wget_response_t;
 
-/* Sends "GET <path> HTTP/1.1", a Host header, and Connection: close (so
- * the server ends the stream itself - no keep-alive/pipelining to manage
- * here), then reads the status line and headers, capturing only what
- * this needs: the status code, Location (redirects), Content-Length.
- * Anything else is read and discarded. Not implemented: chunked
- * Transfer-Encoding - every response this is actually built for (GitHub
- * release assets, served from S3-backed storage) sends a real
+/* Sends "GET <path> HTTP/1.1", a Host header, Connection: close (so the
+ * server ends the stream itself - no keep-alive/pipelining to manage
+ * here), then any caller-supplied extra headers (-H/--header - see
+ * cmd_wget(), e.g. "Authorization: Bearer <token>") verbatim, one per
+ * line, before the blank line that ends the request. Resent unchanged on
+ * every redirect hop, same as a real browser/curl/wget's own default
+ * behavior - this file does not try to strip anything across a
+ * cross-origin redirect. Then reads the status line and headers,
+ * capturing only what this needs: the status code, Location (redirects),
+ * Content-Length. Anything else is read and discarded. Not implemented:
+ * chunked Transfer-Encoding - every response this is actually built for
+ * (GitHub release assets, served from S3-backed storage) sends a real
  * Content-Length; add chunked support if a real target ever needs it. */
-static int wget_request(wget_conn_t *c, const wget_url_t *u, wget_response_t *resp)
+static int wget_request(wget_conn_t *c, const wget_url_t *u, wget_response_t *resp,
+                         const char headers[][WGET_HEADER_MAX], int header_count)
 {
     char line[WGET_LINE_MAX];
     char req[WGET_LINE_MAX];
-    int n;
+    size_t off = 0;
+    int n, i;
 
     memset(resp, 0, sizeof(*resp));
     resp->content_length = -1;
@@ -8132,8 +8147,7 @@ static int wget_request(wget_conn_t *c, const wget_url_t *u, wget_response_t *re
                  "GET %s HTTP/1.1\r\n"
                  "Host: %s\r\n"
                  "User-Agent: nshbox-wget/1.0\r\n"
-                 "Connection: close\r\n"
-                 "\r\n",
+                 "Connection: close\r\n",
                  u->path, u->host);
 
     if (n < 0 || (size_t)n >= sizeof(req)) {
@@ -8141,7 +8155,29 @@ static int wget_request(wget_conn_t *c, const wget_url_t *u, wget_response_t *re
         return -1;
     }
 
-    if (wget_conn_write_all(c, req, (size_t)n) != 0) {
+    off = (size_t)n;
+
+    for (i = 0; i < header_count; i++) {
+        n = snprintf(req + off, sizeof(req) - off, "%s\r\n", headers[i]);
+
+        if (n < 0 || (size_t)n >= sizeof(req) - off) {
+            fprintf(stderr, "wget: request too long\n");
+            return -1;
+        }
+
+        off += (size_t)n;
+    }
+
+    n = snprintf(req + off, sizeof(req) - off, "\r\n");
+
+    if (n < 0 || (size_t)n >= sizeof(req) - off) {
+        fprintf(stderr, "wget: request too long\n");
+        return -1;
+    }
+
+    off += (size_t)n;
+
+    if (wget_conn_write_all(c, req, off) != 0) {
         fprintf(stderr, "wget: %s: write failed: %s\n", u->host, strerror(errno));
         return -1;
     }
@@ -8364,6 +8400,8 @@ static int cmd_wget(int argc, char **argv)
     int insecure = 0;
     int quiet = 0;
     wget_checksum_t ck;
+    char headers[WGET_MAX_HEADERS][WGET_HEADER_MAX];
+    int header_count = 0;
     int i;
 
     memset(&ck, 0, sizeof(ck));
@@ -8372,7 +8410,7 @@ static int cmd_wget(int argc, char **argv)
     if (argc < 2) {
         fprintf(stderr,
             "Usage: nshbox wget <url> [-o file | -O [file|-]] [-L n] [-q|-s] "
-            "[-k|--insecure] [--sha{1,256,384,512}|--hash [hex]]\n");
+            "[-k|--insecure] [-H \"Name: value\"] [--sha{1,256,384,512}|--hash [hex]]\n");
         return 2;
     }
 
@@ -8433,6 +8471,45 @@ static int cmd_wget(int argc, char **argv)
             insecure = 1;
         } else if (!strcmp(a, "-q") || !strcmp(a, "--quiet") || !strcmp(a, "-s") || !strcmp(a, "--silent")) {
             quiet = 1;
+        } else if (!strcmp(a, "-H") || !strcmp(a, "--header")) {
+            /* curl's own flag name/shape, not real wget's (which has no
+               direct equivalent - "--header" is a GNU wget extension too,
+               but this spells it the curl way since -H is the one the
+               user already knows). Repeatable, bounded (WGET_MAX_HEADERS).
+               Rejected outright, not silently stripped/escaped: no colon
+               at all (not header-shaped), or a literal CR/LF (would let
+               the value smuggle extra headers or corrupt the request line
+               - this is the one place user-supplied text lands directly
+               in the raw HTTP request this file writes to the wire). */
+            if (i + 1 >= argc) {
+                fprintf(stderr, "wget: -H needs a header (\"Name: value\")\n");
+                return 2;
+            }
+
+            i++;
+
+            if (header_count >= WGET_MAX_HEADERS) {
+                fprintf(stderr, "wget: too many -H headers (max %d)\n", WGET_MAX_HEADERS);
+                return 2;
+            }
+
+            if (!strchr(argv[i], ':')) {
+                fprintf(stderr, "wget: -H: '%s' is not a valid header (expected \"Name: value\")\n", argv[i]);
+                return 2;
+            }
+
+            if (strpbrk(argv[i], "\r\n")) {
+                fprintf(stderr, "wget: -H: header must not contain a newline\n");
+                return 2;
+            }
+
+            if (snprintf(headers[header_count], sizeof(headers[header_count]), "%s", argv[i])
+                    >= (int)sizeof(headers[header_count])) {
+                fprintf(stderr, "wget: -H: header too long\n");
+                return 2;
+            }
+
+            header_count++;
         } else if (!strcmp(a, "--hash")) {
             ck.active = 1;
 
@@ -8515,7 +8592,7 @@ static int cmd_wget(int argc, char **argv)
             return 1;
         }
 
-        rc = wget_request(&conn, &u, &resp);
+        rc = wget_request(&conn, &u, &resp, headers, header_count);
 
         if (rc != 0) {
             wget_conn_close(&conn);
@@ -12408,7 +12485,7 @@ static const command_t commands[] = {
     { "md5sum",   cmd_md5sum,   "Print MD5 checksums [--json]" },
     { "totp",     cmd_totp,     "Generate a TOTP code (--secret [--text] | --url <uri> | --file <path>) [--algorithm/--digits/--period/--time]" },
     { "serve",    cmd_serve,    "GET /status, POST /totp over TCP and/or a UNIX socket [--listen host:port] [--unix [path]] [--unix-mode mode] [--secret name=path] [--foreground]" },
-    { "wget",     cmd_wget,     "Fetch a URL over HTTP(S) (-o/-O file, -O alone/-O - for remote-name/stdout, -L n redirects, -q/-s quiet, -k/--insecure, --sha{1,256,384,512}/--hash [hex] to verify, or bare to just print the checksum)" },
+    { "wget",     cmd_wget,     "Fetch a URL over HTTP(S) (-o/-O file, -O - stdout, -L n redirects, -q/-s quiet, -k/--insecure, -H \"Name: value\", --sha{1,256,384,512}/--hash [hex] to verify or print)" },
 #endif
     { "base64",   cmd_base64,   "Base64 encode/decode (-d decode, -u URL-safe alphabet, -w cols wrap, 0 = no wrap) [file]" },
     { "jwt",      cmd_jwt,      "Decode a JWT's payload (--header for header, --all for both) - no signature verification [token]" },
