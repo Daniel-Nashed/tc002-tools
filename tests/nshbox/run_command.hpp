@@ -20,11 +20,11 @@ struct CommandResult
 // stdin_data to the child's stdin before closing it. Resolved via
 // execvp() - a bare name like "grep" searches PATH (this is a controlled
 // container with a normal, guaranteed PATH, unlike the TC002 device
-// nshbox itself has to work around - see nshbox/README.md), a path
+// nshbox itself has to work around - see components/nshbox/README.md), a path
 // containing '/' is used directly either way. fork()+execvp()+pipe(),
 // not popen()/system() - the argv vector reaches the child directly,
 // never interpreted by a shell, matching this project's own reasoning
-// for nshbox's own tar-via-gzip design (see nshbox/src/nshbox.c).
+// for nshbox's own tar-via-gzip design (see components/nshbox/src/nshbox.c).
 CommandResult run_command(const std::string &path, const std::vector<std::string> &args,
                            const std::string &stdin_data = "");
 

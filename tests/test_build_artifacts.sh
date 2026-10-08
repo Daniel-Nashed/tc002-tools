@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks the artifacts in dist/ without needing a device. Run after
-# build/build_dropbear.sh (and optionally build/build_nshbox.sh).
+# components/dropbear/build_arm.sh (and optionally components/nshbox/build_arm.sh).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -134,7 +134,7 @@ nshbox_manifest_present()
 check_dropbear_artifacts()
 {
   # One multi-call binary (dropbear, scp, dropbearkey, dbclient and
-  # dropbearconvert in one file - see build/build_dropbear.sh); the five
+  # dropbearconvert in one file - see components/dropbear/build_arm.sh); the five
   # names are symlinks to it, made on the device by install_dropbear.sh.
   local path="${DIST_DIR}/dropbearmulti"
 

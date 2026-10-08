@@ -1,5 +1,5 @@
 // Exercises nshbox's own jwt command - see cmd_jwt()/jwt_decode_segment()
-// in nshbox/src/nshbox.c. There is no widely-available reference CLI tool
+// in components/nshbox/src/nshbox.c. There is no widely-available reference CLI tool
 // to diff a JWT decode against the way other commands here diff against
 // real coreutils, so these tests instead check against a well-known,
 // publicly documented example token (the default sample shown on jwt.io)

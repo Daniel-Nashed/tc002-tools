@@ -1,7 +1,7 @@
 // Compares nshbox's realpath/readlink against real GNU coreutils
 // realpath(1)/readlink(1). Both are thin wrappers around the same libc
 // calls (realpath(3)/readlink(2) - see cmd_realpath()/cmd_readlink() in
-// nshbox/src/nshbox.c), so any mismatch here would mean nshbox's own
+// components/nshbox/src/nshbox.c), so any mismatch here would mean nshbox's own
 // argument handling is wrong, not the underlying resolution logic.
 #include "framework.hpp"
 #include "run_command.hpp"

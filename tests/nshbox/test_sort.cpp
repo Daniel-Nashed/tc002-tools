@@ -2,7 +2,7 @@
 // byte, not just field-by-field, since sort's whole job is producing an
 // exact ordering. main.cpp forces LC_ALL=C for the whole harness so
 // real sort's collation matches nshbox's own plain strcmp()-based
-// comparator (see nshbox/src/nshbox.c - no setlocale()/strcoll() there
+// comparator (see components/nshbox/src/nshbox.c - no setlocale()/strcoll() there
 // at all).
 #include "framework.hpp"
 #include "run_command.hpp"

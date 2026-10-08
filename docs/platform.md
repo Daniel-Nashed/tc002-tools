@@ -170,7 +170,7 @@ This used to be two separate host-driven `adb push` scripts (one for passwd/grou
 had to be re-run by hand after every power cycle just to redo the mount; now only `sshd.sh` (which calls
 `setup_etc.sh` itself) needs re-running after a reboot (which you would do anyway, to restart Dropbear itself).
 Independent of Dropbear/SSH in effect - it also fixes DNS resolution and user/group lookups for anything else
-running on the device, like [nginx](../nginx/README.md) (confirmed end to end, 2026-09-12: `nginx -t` passes
+running on the device, like [nginx](../components/nginx/README.md) (confirmed end to end, 2026-09-12: `nginx -t` passes
 cleanly once this is in place) - but no longer independent in mechanism, since `setup_etc.sh` is what performs the
 bootstrap and mounting now.
 

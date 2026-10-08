@@ -1,5 +1,5 @@
 // Compares nshbox's wc against real GNU coreutils wc(1). nshbox's own
-// counting logic (see wc_stream() in nshbox/src/nshbox.c) is hand-rolled,
+// counting logic (see wc_stream() in components/nshbox/src/nshbox.c) is hand-rolled,
 // so this checks it actually agrees with the real tool on line/word/byte
 // counts, including the classic off-by-one edge case of a file with no
 // trailing newline on its last line.

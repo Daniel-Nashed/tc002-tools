@@ -1,5 +1,5 @@
 // Compares nshbox's own dirname against real GNU coreutils dirname(1) -
-// see nshbox/src/nshbox.c's dirname_one(), a self-contained
+// see components/nshbox/src/nshbox.c's dirname_one(), a self-contained
 // implementation deliberately NOT using libgen.h's dirname(3) (which is
 // allowed to mutate its input and varies by libc) - this is exactly the
 // kind of "does it actually match the real tool" question this harness

@@ -12,8 +12,8 @@ exact build, a test page, a script that makes a throwaway certificate, and a scr
 
 ## What to type
 
-nginx has to be deployed first (`./build_nginx.sh`, then `install/install_on_demand.sh` or a full `./tc002_setup.sh`;
-`/data/bin/nginx` must exist on the device). Then, from the repository root:
+nginx has to be deployed first (`./components/nginx/build.sh`, then `install/install_on_demand.sh` or a full
+`./tc002_setup.sh`; `/data/bin/nginx` must exist on the device). Then, from the repository root:
 
 ```sh
 tests/nginx/run_test.sh
@@ -38,18 +38,19 @@ The script:
 
 A typical good run ends with `RESULT: 8 passed, 0 failed` (`nginx -t`, three HTTP checks, and two TLS checks per
 certificate), and the free memory afterwards is back near where it started. Every curl request has a time limit, so a
-stall (for example a wait for random numbers, see [../../curl/README.md](../../curl/README.md)) shows up as a `FAIL`,
-not as a hung test. On a failure the script prints the nginx error log from the device.
+stall (for example a wait for random numbers, see [../../components/curl/README.md](../../components/curl/README.md))
+shows up as a `FAIL`, not as a hung test. On a failure the script prints the nginx error log from the device.
 
 ## What this nginx can and cannot do
 
-The configuration only uses what this build has (see [nginx/README.md](../../nginx/README.md)):
+The configuration only uses what this build has (see [../../components/nginx/README.md](../../components/nginx/README.md)):
 - **No PCRE and no rewrite module**, so there is no `return`, `if`, `set` or `rewrite`, and `map` works with exact and
   wildcard names but not with regular-expression patterns (`~`, `~*`).
 - **`user root;`** is needed: there is no `nobody` account on the device.
 - **Ports 8080 and 8443**, because port 80 is used by the device's own web UI (`zkgui`).
-- **TLS 1.2 and 1.3 only** - the OpenSSL linked in has TLS 1.0/1.1, DTLS, QUIC, OCSP and a number of old ciphers compiled
-  out (see [../../openssl/README.md](../../openssl/README.md)). A client that insists on one of those cannot connect.
+- **TLS 1.2 and 1.3 only** - the OpenSSL linked in has TLS 1.0/1.1, DTLS, QUIC, OCSP and a number of old ciphers
+  compiled out (see [../../components/openssl/README.md](../../components/openssl/README.md)). A client that insists on
+  one of those cannot connect.
 - Everything lives under `/tmp/ngx`, which is **RAM** (about 36 MB in total on this device): the pid file, logs and
   certificate too. Nothing is written to flash.
 

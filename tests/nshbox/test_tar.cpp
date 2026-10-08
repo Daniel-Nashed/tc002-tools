@@ -1,6 +1,6 @@
 // Round-trips nshbox's tar against real GNU tar - both directions
 // (nshbox creates, real tar extracts; real tar creates, nshbox extracts)
-// plus gzip interop (-z, see nshbox/src/nshbox.c's fork/pipe/execlp
+// plus gzip interop (-z, see components/nshbox/src/nshbox.c's fork/pipe/execlp
 // wrapper around the gzip binary). Compares extracted file CONTENT, not
 // raw archive bytes - two tar implementations can produce a
 // byte-different but equally valid ustar archive (header field padding,

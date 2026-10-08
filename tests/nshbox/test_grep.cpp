@@ -1,5 +1,5 @@
 // Compares nshbox's grep against real GNU grep(1). nshbox's grep uses
-// POSIX <regex.h> (see nshbox/src/nshbox.c), the same regex engine GNU
+// POSIX <regex.h> (see components/nshbox/src/nshbox.c), the same regex engine GNU
 // grep itself builds on, so behavior should match closely for the
 // non-GNU-extension subset this harness exercises.
 #include "framework.hpp"

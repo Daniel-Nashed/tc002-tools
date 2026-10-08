@@ -100,7 +100,7 @@ command -v curl >/dev/null 2>&1 || die "need curl"
 command -v tar >/dev/null 2>&1 || die "need tar"
 
 # The install scripts come from this checkout and must match the binaries
-CHECKOUT_VERSION="$(sed -n 's/.*NSHBOX_VERSION "\(.*\)".*/\1/p' nshbox/src/version.h 2>/dev/null || true)"
+CHECKOUT_VERSION="$(sed -n 's/.*NSHBOX_VERSION "\(.*\)".*/\1/p' components/nshbox/src/version.h 2>/dev/null || true)"
 if [ -n "$CHECKOUT_VERSION" ] && [ "$CHECKOUT_VERSION" != "$VERSION" ]; then
   log "WARNING: this checkout is at version ${CHECKOUT_VERSION}, you are pulling ${VERSION}."
   log "         The install scripts and the binaries are versioned together - for an exact match: git checkout v${VERSION}"

@@ -1,6 +1,6 @@
 // Compares nshbox's du against real GNU coreutils du(1). Uses -b
 // (apparent size, exact byte count - see du_path() in
-// nshbox/src/nshbox.c) on both sides deliberately: du's *default* output
+// components/nshbox/src/nshbox.c) on both sides deliberately: du's *default* output
 // is disk usage in filesystem blocks, which depends on the underlying
 // filesystem's own block size and is not reproducibly comparable between
 // two independent calls the way a plain byte count is. Sorted line

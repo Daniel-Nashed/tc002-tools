@@ -9,11 +9,11 @@
 /build/work-musl/
 *.o
 *.a
-/nshbox/src/nshbox
-/nshbox/src/nshbox-static
-/tc002-discover/src/tc002-discover
+/components/nshbox/src/nshbox
+/components/nshbox/src/nshbox-static
+/components/tc002-discover/src/tc002-discover
 /tests/nshbox/nshbox_tests
-/jwt-verify/jwt_verify
+/components/jwt-verify/jwt_verify
 
 # Never commit key material or device-specific data
 *.pem

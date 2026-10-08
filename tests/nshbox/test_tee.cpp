@@ -1,5 +1,5 @@
 // Compares nshbox's tee against real tee(1) - both copy stdin to stdout
-// and to each named file (see cmd_tee() in nshbox/src/nshbox.c).
+// and to each named file (see cmd_tee() in components/nshbox/src/nshbox.c).
 #include "framework.hpp"
 #include "run_command.hpp"
 #include "temp_fixture.hpp"

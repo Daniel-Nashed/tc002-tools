@@ -1,5 +1,5 @@
 // Reverse (IP -> name) lookups in dig/nslookup - see dns_reverse_name() in
-// nshbox/src/nshbox.c. Whether a PTR record exists depends on whatever
+// components/nshbox/src/nshbox.c. Whether a PTR record exists depends on whatever
 // resolver the container has, so these tests do not assert on the answer.
 // They assert on the *name that was queried*: both a failed and a
 // successful lookup print it (stderr "dig: <name>: ..." / stdout answer

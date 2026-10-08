@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Standard entrypoint for running anything under build/ or tests/ inside
+# Standard entrypoint for running anything under build/, components/ or tests/ inside
 # the tc002-tools-test-ubuntu container - the Ubuntu/glibc native-build
 # counterpart to build/docker-alpine-arm/run.sh and build/docker-alpine/run.sh, used
-# only by build/test_nshbox_functional.sh (see build/docker-ubuntu/Dockerfile
+# only by components/nshbox/test_functional.sh (see build/docker-ubuntu/Dockerfile
 # for why this needs a separate image from both of those). Always rebuilds
 # the image first - cheap and near-instant when the Dockerfile has not
 # changed (Docker's own layer cache), same reasoning as the other two
@@ -10,7 +10,7 @@
 #
 # Usage:
 #   build/docker-ubuntu/run.sh                              # interactive shell
-#   build/docker-ubuntu/run.sh build/test_nshbox_functional.sh
+#   build/docker-ubuntu/run.sh components/nshbox/test_functional.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,7 +26,13 @@ docker build --build-arg UBUNTU_VERSION="$UBUNTU_VERSION" -t "$IMAGE" "$SCRIPT_D
 
 # Every container gets a readable, unique name (image, what it runs, this script's
 # process id), so "docker ps" shows what is running and parallel runs do not clash.
-CONTAINER_LABEL="$(printf '%s' "$(basename "${1:-shell}" .sh)" | tr -c 'A-Za-z0-9_.-' '_')"
+# Component scripts share file names (components/<name>/build_arm.sh), so
+# their directory is part of the label.
+CONTAINER_LABEL="$(basename "${1:-shell}" .sh)"
+case "${1:-}" in
+  components/*/*) CONTAINER_LABEL="$(basename "$(dirname "$1")")-${CONTAINER_LABEL}" ;;
+esac
+CONTAINER_LABEL="$(printf '%s' "$CONTAINER_LABEL" | tr -c 'A-Za-z0-9_.-' '_')"
 CONTAINER_NAME="${IMAGE}-${CONTAINER_LABEL}-$$"
 
 # The commit is asked on the host: inside the container git refuses the mounted

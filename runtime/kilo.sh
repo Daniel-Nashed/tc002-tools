@@ -8,7 +8,7 @@
 # Not "exec kilo" directly: kilo does not always leave the terminal in a
 # clean state on exit, so this runs it normally (control returns here
 # once it exits) and then clears the terminal - nshbox's own "clear"
-# applet (see nshbox/README.md), invoked by its own absolute path like
+# applet (see components/nshbox/README.md), invoked by its own absolute path like
 # every other nshbox-provided command elsewhere in this project. kilo's
 # own exit code is still what gets returned from here, not clear's.
 "/data/bin/kilo" "$@"

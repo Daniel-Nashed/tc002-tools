@@ -16,7 +16,7 @@ reproduced below alongside ncdu's own license.
 ## Dropbear
 
 Reproduced verbatim from Dropbear's `LICENSE` file (version pinned in
-[build/build_dropbear.sh](build/build_dropbear.sh)):
+[components/dropbear/build_arm.sh](components/dropbear/build_arm.sh)):
 
 ```text
 Dropbear contains a number of components from different sources, hence there
@@ -137,7 +137,8 @@ Research (NWO) under grant 639.073.005 and Veni 2013 project 13114.
 
 ## kilo
 
-Reproduced verbatim from kilo's `LICENSE` file (commit pinned in [build/build_kilo.sh](build/build_kilo.sh)):
+Reproduced verbatim from kilo's `LICENSE` file (commit pinned in
+[components/kilo/build_arm.sh](components/kilo/build_arm.sh)):
 
 ```text
 Copyright (c) 2016, Salvatore Sanfilippo <antirez at gmail dot com>
@@ -168,7 +169,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## ncdu
 
-Reproduced verbatim from ncdu's `COPYING` file (version pinned in [build/build_ncdu.sh](build/build_ncdu.sh)):
+Reproduced verbatim from ncdu's `COPYING` file (version pinned in
+[components/ncdu/build_arm.sh](components/ncdu/build_arm.sh)):
 
 ```text
 Copyright (c) Yorhel
@@ -248,7 +250,8 @@ SOFTWARE.
 
 ## curl
 
-Reproduced verbatim from curl's `COPYING` file (version pinned in [build/build_curl.sh](build/build_curl.sh)):
+Reproduced verbatim from curl's `COPYING` file (version pinned in
+[components/curl/build_arm.sh](components/curl/build_arm.sh)):
 
 ```text
 COPYRIGHT AND PERMISSION NOTICE
@@ -277,7 +280,8 @@ in this Software without prior written authorization of the copyright holder.
 
 ## nginx
 
-Reproduced verbatim from nginx's `LICENSE` file (version pinned in [build/build_nginx.sh](build/build_nginx.sh)):
+Reproduced verbatim from nginx's `LICENSE` file (version pinned in
+[components/nginx/build_arm.sh](components/nginx/build_arm.sh)):
 
 ```text
 Copyright (C) 2002-2021 Igor Sysoev
@@ -308,12 +312,12 @@ SUCH DAMAGE.
 
 ## mbedTLS
 
-mbedTLS's `LICENSE` file (version pinned in [build/build_mbedtls.sh](build/build_mbedtls.sh)) offers a choice of two
-licenses - Apache-2.0 or GPL-2.0-or-later ("Copyright The Mbed TLS Contributors", per its own source file headers).
-This project takes it under Apache-2.0, matching `tc002-tools`'s own license (see [LICENSE](LICENSE)), and
-reproduces that license verbatim below rather than also reproducing the unused GPL-2.0-or-later alternative. mbedTLS
-is statically linked into `curl` and, for the checksum commands' digest functions (MD5, SHA-1, SHA-256, SHA-384,
-SHA-512), into `nshbox`:
+mbedTLS's `LICENSE` file (version pinned in [components/mbedtls/build_arm.sh](components/mbedtls/build_arm.sh)) offers a
+choice of two licenses - Apache-2.0 or GPL-2.0-or-later ("Copyright The Mbed TLS Contributors", per its own source file
+headers). This project takes it under Apache-2.0, matching `tc002-tools`'s own license (see [LICENSE](LICENSE)), and
+reproduces that license verbatim below rather than also reproducing the unused GPL-2.0-or-later alternative. mbedTLS is
+statically linked into `curl` and, for the checksum commands' digest functions (MD5, SHA-1, SHA-256, SHA-384, SHA-512),
+into `nshbox`:
 
 ```text
                                  Apache License
@@ -496,9 +500,9 @@ SHA-512), into `nshbox`:
 
 ## OpenSSL
 
-Reproduced verbatim from OpenSSL's `LICENSE.txt` file (version pinned in [build/build_openssl.sh](build/build_openssl.sh)):
-Apache License 2.0, "Copyright 1995-2026 The OpenSSL Project Authors. All Rights Reserved" (per its own source file
-headers):
+Reproduced verbatim from OpenSSL's `LICENSE.txt` file (version pinned in
+[components/openssl/build_arm.sh](components/openssl/build_arm.sh)): Apache License 2.0, "Copyright 1995-2026 The
+OpenSSL Project Authors. All Rights Reserved" (per its own source file headers):
 
 ```text
                                  Apache License
@@ -682,7 +686,8 @@ headers):
 
 ## gzip
 
-Reproduced verbatim from gzip's `COPYING` file (version pinned in [build/build_gzip.sh](build/build_gzip.sh)):
+Reproduced verbatim from gzip's `COPYING` file (version pinned in
+[components/gzip/build_arm.sh](components/gzip/build_arm.sh)):
 
 ```text
                     GNU GENERAL PUBLIC LICENSE
@@ -1311,7 +1316,8 @@ copy of the Program in return for a fee.
 
 ## 7-Zip
 
-Reproduced verbatim from 7-Zip's `DOC/License.txt` file (version pinned in [build/build_7zip.sh](build/build_7zip.sh)):
+Reproduced verbatim from 7-Zip's `DOC/License.txt` file (version pinned in
+[components/7zip/build_arm.sh](components/7zip/build_arm.sh)):
 
 ```text
   7-Zip source code

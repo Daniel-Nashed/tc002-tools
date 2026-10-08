@@ -2,7 +2,7 @@
 # The first step of a full deployment, before install_dropbear.sh: finds
 # the TC002 - first by checking for an already-connected ADB device (USB,
 # or an existing session), then, only if that finds nothing, using this
-# project's own host-side network discovery tool (../tc002-discover - see
+# project's own host-side network discovery tool (../components/tc002-discover - see
 # its own README) - instead of requiring an operator to type DEVICE_IP or
 # DEVICE in by hand. Writes whatever it finds into config/tc002-tools.conf
 # so every other install/*.sh script picks it up the normal way
@@ -36,7 +36,7 @@
 # that case would be pointless.
 #
 # If dist/tc002-discover has not been built yet, asks before building it
-# (../build_tc002-discover.sh - runs in a separate Alpine container, see
+# (../components/tc002-discover/build.sh - runs in a separate Alpine container, see
 # build/docker-alpine/README.md) rather than silently doing so or hard
 # failing.
 set -euo pipefail
@@ -80,7 +80,7 @@ pick one.
 
 If discovery finds nothing at all - expected from WSL, whose NAT
 networking cannot receive the TC002's UDP broadcast, see
-../tc002-discover/README.md - this first tries the last DEVICE_IP a
+../components/tc002-discover/README.md - this first tries the last DEVICE_IP a
 previous successful run already wrote into the config file, verified with
 a real "adb connect" (not trusted blindly, since DHCP may have moved the
 device since then). Only if that also fails does it ask for an IP address
@@ -167,19 +167,19 @@ ensure_discover_built()
   fi
 
   log "${DISCOVER_BIN} not built yet"
-  printf '[tc002-tools] build it now (./build_tc002-discover.sh - runs in a separate Alpine container)? [y/N] ' >&2
+  printf '[tc002-tools] build it now (./components/tc002-discover/build.sh - runs in a separate Alpine container)? [y/N] ' >&2
   read -r answer
 
   case "$answer" in
     y|Y|yes|Yes)
-      "${REPO_ROOT}/build_tc002-discover.sh"
+      "${REPO_ROOT}/components/tc002-discover/build.sh"
       ;;
     *)
-      die "tc002-discover is required for automatic discovery; build it yourself (./build_tc002-discover.sh) or set DEVICE_IP/DEVICE in ${CONFIG_FILE} directly"
+      die "tc002-discover is required for automatic discovery; build it yourself (./components/tc002-discover/build.sh) or set DEVICE_IP/DEVICE in ${CONFIG_FILE} directly"
       ;;
   esac
 
-  [ -x "$DISCOVER_BIN" ] || die "build_tc002-discover.sh ran but ${DISCOVER_BIN} still does not exist - inspect its output above"
+  [ -x "$DISCOVER_BIN" ] || die "components/tc002-discover/build.sh ran but ${DISCOVER_BIN} still does not exist - inspect its output above"
 }
 
 # Extracts one field from a flat JSON object (no nested braces - true of
@@ -270,7 +270,7 @@ discover()
 # targeted in-place edits rather than rewriting the whole file, so any
 # other keys an operator has already set (SSH_PORT, AUTHORIZED_KEY,
 # INSTALL_PREFIX) survive untouched. An empty hostname (no PTR record, or
-# one that did not validate - see tc002-discover/README.md) just clears
+# one that did not validate - see components/tc002-discover/README.md) just clears
 # DEVICE_HOSTNAME rather than leaving a stale one from a previous run.
 write_device_info()
 {
@@ -438,7 +438,7 @@ use_ip_hint()
 # wrote into the config file, when live discovery (discover(), above)
 # finds nothing - the common case on WSL, where UDP broadcast reception
 # never works at all (see usage() above), so tc002-discover's own cache/
-# TCP-probe fast path (see ../tc002-discover/README.md) never gets a first
+# TCP-probe fast path (see ../components/tc002-discover/README.md) never gets a first
 # IP to cache in the first place: that fast path only helps once *some*
 # run, anywhere, has completed a real UDP discovery to seed it, and on a
 # WSL-only setup that first run can never happen on its own.
@@ -504,7 +504,7 @@ main()
     return
   fi
 
-  log "no device found via discovery (expected from WSL - broadcast reception does not work there, see ../tc002-discover/README.md)"
+  log "no device found via discovery (expected from WSL - broadcast reception does not work there, see ../components/tc002-discover/README.md)"
 
   if try_cached_ip; then
     return

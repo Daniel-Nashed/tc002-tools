@@ -63,7 +63,7 @@ Stripped sizes of the current artifacts (`dist/`):
   itself for every connection, which works through the symlinks the installer creates. `runtime/init.sh` recreates a
   missing link at boot.
 - **mbedTLS for nshbox's checksums** (instead of OpenSSL's `libcrypto`) and for curl, statically linked. Its
-  `MBEDTLS_PLATFORM_DEV_RANDOM` is set to `/dev/urandom` by `build/build_mbedtls.sh`: on musl mbedTLS reads
+  `MBEDTLS_PLATFORM_DEV_RANDOM` is set to `/dev/urandom` by `components/mbedtls/build_arm.sh`: on musl mbedTLS reads
   `/dev/random`, which on the device's 4.9 kernel is the blocking pool with about 60 bits credited, so every curl start
   (even `curl --version`) hung waiting for entropy. Found with `qemu-arm -strace`; the build now checks that
   `libmbedcrypto.a` contains no `/dev/random`.
@@ -71,7 +71,8 @@ Stripped sizes of the current artifacts (`dist/`):
   DoH, NTLM, Kerberos, Negotiate and a few others are off; HTTP(S), FTP(S), file, proxy, POP3, IMAP, SMTP and MQTT stay.
 - **OpenSSL trimmed by feature family** for nginx and the CLI: `no-async`, `no-tests`, `no-module`, `no-legacy`, DTLS,
   QUIC, SRP, PSK, CMS, CT, TS, CMP, OCSP, the old ciphers and digests, SM2/3/4, Camellia, ARIA, TLS 1.0/1.1. TLS 1.2 and
-  1.3 with AES-GCM, ChaCha20 and RSA/ECDSA remain. See [../openssl/README.md](../openssl/README.md).
+  1.3 with AES-GCM, ChaCha20 and RSA/ECDSA remain. See
+  [../components/openssl/README.md](../components/openssl/README.md).
 - **nginx:** cross-building runs small ARM test programs during `configure`; `build/qemu-cc-wrapper.sh` runs them under
   `qemu-arm` (with a private root providing the musl loader). PCRE2 is enabled (regex `location`/`map`, from Alpine's
   static `pcre2-static` package), but not the rewrite module, so no `return`/`if`/`set`/`rewrite`; the `map`
@@ -100,8 +101,8 @@ OpenSSL CLI is left out of the default pack because it is too big for this devic
 ./verify.sh               # every artifact: ARM EABI hard-float, fully static, stripped, no build-host paths, manifest
 ./tc002_setup.sh          # deploy to the device over adb
 tests/nginx/run_test.sh   # on the device: nginx -t, HTTP, map, stub_status, TLS 1.2/1.3 with RSA and ECDSA, memory
-./test_nshbox.sh          # host-side nshbox functional tests against GNU tools (Ubuntu container)
-./test_build_nshbox_native.sh top -l 5   # nshbox built for this host (dist/amd64/ or dist/arm64/), then run
+./components/nshbox/test.sh          # host-side nshbox functional tests against GNU tools (Ubuntu container)
+./components/nshbox/test_build_native.sh top -l 5   # nshbox built for this host (dist/amd64/ or dist/arm64/), then run
 ```
 
 Verified on the device so far: nshbox (DNS lookups, `hostname`), kilo, gzip, curl (`--version`, HTTPS), 7zz, ncdu, adb
@@ -113,5 +114,6 @@ persistence of the new binaries.
 
 - [build_platform.md](build_platform.md) - the build commands and container layout
 - [device_layout.md](device_layout.md) - where everything lives on the device, and the deployment modes
-- Component READMEs: [curl](../curl/README.md), [mbedtls](../mbedtls/README.md), [nginx](../nginx/README.md),
-  [openssl](../openssl/README.md), [7zip](../7zip/README.md), [ncdu](../ncdu/README.md), [nshbox](../nshbox/README.md)
+- Component READMEs: [curl](../components/curl/README.md), [mbedtls](../components/mbedtls/README.md),
+  [nginx](../components/nginx/README.md), [openssl](../components/openssl/README.md),
+  [7zip](../components/7zip/README.md), [ncdu](../components/ncdu/README.md), [nshbox](../components/nshbox/README.md)

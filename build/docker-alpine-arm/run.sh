@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Standard entrypoint for running anything under build/ inside the
+# Standard entrypoint for running anything under build/ or components/ inside the
 # tc002-tools-build-musl container (Alpine, ARM32 musl cross compiler) - the
 # entry point for every ARM device build. The image is identified by the inputs
 # that define it (image-tag.sh: Dockerfile, ALPINE_VERSION, MCM_COMMIT): it is built
@@ -31,7 +31,13 @@ fi
 
 # Every container gets a readable, unique name (image, what it runs, this script's
 # process id), so "docker ps" shows what is running and parallel runs do not clash.
-CONTAINER_LABEL="$(printf '%s' "$(basename "${1:-shell}" .sh)" | tr -c 'A-Za-z0-9_.-' '_')"
+# Component scripts share file names (components/<name>/build_arm.sh), so
+# their directory is part of the label.
+CONTAINER_LABEL="$(basename "${1:-shell}" .sh)"
+case "${1:-}" in
+  components/*/*) CONTAINER_LABEL="$(basename "$(dirname "$1")")-${CONTAINER_LABEL}" ;;
+esac
+CONTAINER_LABEL="$(printf '%s' "$CONTAINER_LABEL" | tr -c 'A-Za-z0-9_.-' '_')"
 CONTAINER_NAME="${IMAGE}-${CONTAINER_LABEL}-$$"
 
 # The commit is asked on the host: inside the container git refuses the mounted

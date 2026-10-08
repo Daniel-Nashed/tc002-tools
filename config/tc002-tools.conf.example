@@ -12,7 +12,7 @@
 DEVICE_IP=
 
 # Hostname reported by reverse DNS during discovery (see
-# install/discover_device.sh and tc002-discover/README.md's validated
+# install/discover_device.sh and components/tc002-discover/README.md's validated
 # reverse-DNS section) - informational only right now, for ssh/scp
 # commands you type by hand that might prefer a stable name over a
 # DHCP-assigned IP. Nothing in install/*.sh reads this back; it is not a

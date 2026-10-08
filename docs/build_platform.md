@@ -110,18 +110,19 @@ nginx needing OpenSSL, are handled automatically). **`--rebuild` on its own does
 even if they were already built** - those stay opt-in per run just like without `--rebuild`; combine `--rebuild --all`
 (or `--rebuild` with the specific `--with-X` flags) to force a full rebuild of everything.
 
-`./build_nshbox.sh`, `./build_kilo.sh`, `./build_gzip.sh`, `./build_ncdu.sh`, `./build_dropbear.sh`,
-`./build_ca_bundle.sh`, `./build_mbedtls.sh`, `./build_curl.sh`, `./build_nginx.sh`, `./build_openssl.sh`, or
-`./build_7zip.sh` each build just one component directly (`./build_all.sh build/build_dropbear.sh`, etc. is the
-equivalent long form). `./build_tc002-discover.sh` is the one exception - it builds in a separate, native Alpine
-container (see [build/docker-alpine/README.md](../build/docker-alpine/README.md)), because it is a host-side tool, not
-an ARM one. Do not run anything under `build/` directly (`cd build && ./build_all.sh`, `./build/build_dropbear.sh`,
-...) - it runs on your host instead of in the container, and fails partway through with a confusing error because your
-host is missing tools the container has. Every `build/*.sh` script enforces this itself: it checks for
-`TC002_TOOLS_CONTAINER=1` (set only inside the container image, see
-[build/docker-alpine-arm/Dockerfile](../build/docker-alpine-arm/Dockerfile)) and refuses to run with a clear message if
-it is not there. The scripts of the components that need the ARM musl compiler also check `TC002_TOOLCHAIN=musl` (also
-set only by that image).
+`./components/nshbox/build.sh`, `./components/kilo/build.sh`, `./components/gzip/build.sh`,
+`./components/ncdu/build.sh`, `./components/dropbear/build.sh`, `./components/ca-bundle/build.sh`,
+`./components/mbedtls/build.sh`, `./components/curl/build.sh`, `./components/nginx/build.sh`,
+`./components/openssl/build.sh`, or `./components/7zip/build.sh` each build just one component directly (`./build_all.sh
+components/dropbear/build_arm.sh`, etc. is the equivalent long form). `./components/tc002-discover/build.sh` is the one
+exception - it builds in a separate, native Alpine container (see
+[build/docker-alpine/README.md](../build/docker-alpine/README.md)), because it is a host-side tool, not an ARM one. Do
+not run the in-container scripts directly (`build/build_all_musl.sh`, `components/dropbear/build_arm.sh`, ...) - they
+would run on your host instead of in the container, and fail partway through with a confusing error because your host is
+missing tools the container has. Every in-container script enforces this itself: it checks for `TC002_TOOLS_CONTAINER=1`
+(set only inside the container image, see [build/docker-alpine-arm/Dockerfile](../build/docker-alpine-arm/Dockerfile))
+and refuses to run with a clear message if it is not there. The scripts of the components that need the ARM musl
+compiler also check `TC002_TOOLCHAIN=musl` (also set only by that image).
 
 `install/` and `tests/test_device_access.sh` are different: they talk to the device over `adb`/USB and run on your host,
 not in the container.
@@ -132,13 +133,13 @@ statically linked, stripped, contains no build-host path, and has a manifest.
 ### What `./build_all.sh` actually does
 
 It builds `tc002-discover` first (native container), then launches
-[build/docker-alpine-arm/run.sh](../build/docker-alpine-arm/run.sh) with `build/build_all_musl.sh`. `run.sh` rebuilds the
-container image before every run (fast when the Dockerfile has not changed, thanks to Docker's own layer cache - this is
-what makes it impossible to silently keep running against a stale image) and then runs the requested command inside
-it, with the repository bind-mounted. Before launching anything, `./build_all.sh` checks on the host whether everything
-requested is already built - if so, it reports that directly and skips the container launch entirely. Every build script
-prints how long it took when it finishes (`build_openssl.sh took 6m 42s (ok)`), and the full log of an image build is
-kept in `build/work-musl/image-build.log`.
+[build/docker-alpine-arm/run.sh](../build/docker-alpine-arm/run.sh) with `build/build_all_musl.sh`. `run.sh` rebuilds
+the container image before every run (fast when the Dockerfile has not changed, thanks to Docker's own layer cache -
+this is what makes it impossible to silently keep running against a stale image) and then runs the requested command
+inside it, with the repository bind-mounted. Before launching anything, `./build_all.sh` checks on the host whether
+everything requested is already built - if so, it reports that directly and skips the container launch entirely. Every
+build script prints how long it took when it finishes (`openssl/build_arm.sh took 6m 42s (ok)`), and the full
+log of an image build is kept in `build/work-musl/image-build.log`.
 
 ## Shared build variables
 

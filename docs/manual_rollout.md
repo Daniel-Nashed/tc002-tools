@@ -13,14 +13,14 @@ starts automatically every time - `./tc002_start.sh` is then only needed if Drop
   USB with `adb devices` listing it. This, and everything below, runs on your host - not in the build container (see
   the next point).
 - You have built Dropbear - one multi-call binary, `dist/dropbearmulti`, that is `dropbear`, `scp`, `dropbearkey`,
-  `dbclient` and `dropbearconvert` in one file: `./build_dropbear.sh` (or plain `./build_all.sh` for everything) - see [build_platform.md](build_platform.md) and
-  [dropbear.md](dropbear.md).
+  `dbclient` and `dropbearconvert` in one file: `./components/dropbear/build.sh` (or plain `./build_all.sh` for
+  everything) - see [build_platform.md](build_platform.md) and [dropbear.md](dropbear.md).
 - You have an SSH public key file you intend to authorize (not the private key) - or let
   `resolve_authorized_key()` fall back to `$HOME/.ssh/id_ed25519.pub` (asking first), or generate one, if you don't
   already have one ready.
 - `config/tc002-tools.conf` is optional up front now - `install/discover_device.sh` creates it from
   `config/tc002-tools.conf.example` and fills in `DEVICE_IP` automatically, using this project's own
-  [tc002-discover](../tc002-discover/README.md) (building it first, after asking, if it isn't built yet). Set
+  [tc002-discover](../components/tc002-discover/README.md) (building it first, after asking, if it isn't built yet). Set
   `DEVICE` yourself in the config beforehand only if you have a USB-connected device or an already-established
   connection by serial - that always wins over discovery.
 
@@ -53,12 +53,13 @@ its own.
 install/discover_device.sh
 ```
 
-Runs `dist/tc002-discover --all` (see [../tc002-discover/README.md](../tc002-discover/README.md)) - asking first to
-build it via `./build_tc002-discover.sh` if it isn't there yet - to find the TC002(s) on the local network, then
-writes the one found's IP and hostname into `DEVICE_IP=`/`DEVICE_HOSTNAME=` in `config/tc002-tools.conf` (created
-from the `.example` file if it doesn't exist yet; `DEVICE_HOSTNAME` is informational only - nothing reads it back).
-Does nothing if `DEVICE` is already set in the config - an explicit ADB serial always wins over `DEVICE_IP` anyway.
-Safe to skip entirely and set `DEVICE_IP`/`DEVICE` by hand instead, the same as before this step existed.
+Runs `dist/tc002-discover --all` (see [../components/tc002-discover/README.md](../components/tc002-discover/README.md))
+- asking first to build it via `./components/tc002-discover/build.sh` if it isn't there yet - to find the TC002(s) on
+the local network, then writes the one found's IP and hostname into `DEVICE_IP=`/`DEVICE_HOSTNAME=` in
+`config/tc002-tools.conf` (created from the `.example` file if it doesn't exist yet; `DEVICE_HOSTNAME` is informational
+only - nothing reads it back). Does nothing if `DEVICE` is already set in the config - an explicit ADB serial always
+wins over `DEVICE_IP` anyway. Safe to skip entirely and set `DEVICE_IP`/`DEVICE` by hand instead, the same as before
+this step existed.
 
 **Always searches with `--all`, on purpose**: without it, `tc002-discover` just returns the first device it happens
 to see, which would silently pick the wrong one if more than one TC002 is reachable. If more than one comes back,
@@ -78,16 +79,17 @@ Creates `/data/bin` and `/data/home/.ssh`, sets their ownership/permissions, and
 ## 2. Install nshbox, kilo, gzip
 
 ```sh
-./build_all.sh build/build_nshbox.sh
+./build_all.sh components/nshbox/build_arm.sh
 install/install_tools.sh
 ```
 
-Runs **before** laying out `/etc` deliberately: the next step needs `nshbox` already installed and its applet
-symlinks already refreshed on the device (see step 3). Independent of Dropbear otherwise - see
-[../nshbox/README.md](../nshbox/README.md). `install_tools.sh` installs whichever of `kilo`/`gzip`/`nshbox` have
-been built (one generic script for all three - see [device_layout.md](device_layout.md#deployment-modes) - rather
-than a separate script per tool), and also runs `nshbox install -f` on the device right after pushing it, so every
-applet symlink (`ps`, `top`, `sha256sum`, `grep`, ...) exists right away.
+Runs **before** laying out `/etc` deliberately: the next step needs `nshbox` already installed and its applet symlinks
+already refreshed on the device (see step 3). Independent of Dropbear otherwise - see
+[../components/nshbox/README.md](../components/nshbox/README.md). `install_tools.sh` installs whichever of
+`kilo`/`gzip`/`nshbox` have been built (one generic script for all three - see
+[device_layout.md](device_layout.md#deployment-modes) - rather than a separate script per tool), and also runs
+`nshbox install -f` on the device right after pushing it, so every applet symlink (`ps`, `top`, `sha256sum`, `grep`,
+...) exists right away.
 
 ## 3. Lay out /etc
 
@@ -96,26 +98,24 @@ install/install_etc.sh
 ```
 
 Pushes `setup_etc.sh` (the on-device bootstrap/mount script, see step 6) to `/data/bin/setup_etc.sh`,
-`runtime/etc/{passwd,group,resolv.conf}` plus the CA trust bundle (if `build_openssl.sh` has been run) to
-`/data/etc-overrides/` as staged defaults, and `ncdu`'s binary/wrapper/terminfo data (if `build_ncdu.sh` has been
-run) - always overwriting whatever was staged there before - see
-[device_layout.md](device_layout.md#etcpasswd-etcgroup-etcresolvconf). Terminfo is bundled into a single tar
-archive, pushed as one file, and extracted on-device via `/data/bin/tar` (nshbox's own `tar` applet, invoked by its
-own absolute path - never `nshbox tar`, which like any bare command would depend on `adb shell`'s own `PATH`; not
-gzipped either - at ~10 KB total it isn't worth a `gzip` dependency too) - not N separate `adb push` calls like an
-earlier version of this project did, which turned out to silently drop all but the last file (`adb push`'s own
-per-call success cannot be trusted here any more than `adb connect`'s can - see
-[device_layout.md](device_layout.md)). This step is skipped with a log line, not an error, if `/data/bin/tar` is
-not on the device yet (run step 2 first) - `tc002_setup.sh` always does these in the right order automatically.
-Then runs `setup_etc.sh` itself on the device right away, unconditionally - not just
-relying on `sshd.sh`'s own call to it, which skips `setup_etc.sh` entirely if Dropbear is already running (see its
-idempotency check) - so a newly-staged override (e.g. the CA bundle, added after a device was already up) actually
-lands in the live `/etc` without needing a Dropbear restart first. This also needs `nshbox` already on the device
-(its `grep` applet - this device has no other `grep` in `PATH`, see [device_layout.md](device_layout.md#path)).
-Basic, unconditional installation, run before Dropbear deliberately: Dropbear does not itself need `/etc/passwd`
-(it has its own synthetic fallback - see [dropbear.md](dropbear.md)), and `resolv.conf` (DNS) has nothing to do
-with Dropbear either - a working `/etc` is general system functionality, not something to bundle into or gate
-behind installing Dropbear specifically.
+`runtime/etc/{passwd,group,resolv.conf}` plus the CA trust bundle (if `components/openssl/build_arm.sh` has been run) to
+`/data/etc-overrides/` as staged defaults, and `ncdu`'s binary/wrapper/terminfo data (if `components/ncdu/build_arm.sh`
+has been run) - always overwriting whatever was staged there before - see
+[device_layout.md](device_layout.md#etcpasswd-etcgroup-etcresolvconf). Terminfo is bundled into a single tar archive,
+pushed as one file, and extracted on-device via `/data/bin/tar` (nshbox's own `tar` applet, invoked by its own absolute
+path - never `nshbox tar`, which like any bare command would depend on `adb shell`'s own `PATH`; not gzipped either - at
+~10 KB total it isn't worth a `gzip` dependency too) - not N separate `adb push` calls like an earlier version of this
+project did, which turned out to silently drop all but the last file (`adb push`'s own per-call success cannot be
+trusted here any more than `adb connect`'s can - see [device_layout.md](device_layout.md)). This step is skipped with a
+log line, not an error, if `/data/bin/tar` is not on the device yet (run step 2 first) - `tc002_setup.sh` always does
+these in the right order automatically. Then runs `setup_etc.sh` itself on the device right away, unconditionally - not
+just relying on `sshd.sh`'s own call to it, which skips `setup_etc.sh` entirely if Dropbear is already running (see its
+idempotency check) - so a newly-staged override (e.g. the CA bundle, added after a device was already up) actually lands
+in the live `/etc` without needing a Dropbear restart first. This also needs `nshbox` already on the device (its `grep`
+applet - this device has no other `grep` in `PATH`, see [device_layout.md](device_layout.md#path)). Basic, unconditional
+installation, run before Dropbear deliberately: Dropbear does not itself need `/etc/passwd` (it has its own synthetic
+fallback - see [dropbear.md](dropbear.md)), and `resolv.conf` (DNS) has nothing to do with Dropbear either - a working
+`/etc` is general system functionality, not something to bundle into or gate behind installing Dropbear specifically.
 
 ## 4. Install Dropbear
 
@@ -169,18 +169,18 @@ adb shell /data/bin/init.sh
 ```
 
 This checks that the expected persistent tools are present (a warning, not a blocker, for anything missing - kilo or
-ncdu not being built yet should never stand in the way of SSH access), runs `nshbox install -f` if `nshbox` is
-present, then hands off to `/data/bin/sshd.sh`, which does everything else needed on-device, every single time it
-runs: if Dropbear is already running (a live PID in `/tmp/dropbear.pid`), it does nothing and exits - safe to run
-`init.sh` again (or re-run `tc002_setup.sh`) without starting a second instance. Otherwise it first runs `/data/bin/setup_etc.sh` (pushed by
-step 3, above; also runnable on its own), which makes sure `/etc/passwd`, `/etc/group`, and `/etc/resolv.conf` are
-all in place - the device has none of these by default (see
-[platform.md](platform.md#verified-facts-one-tested-device)), and getting them there needs more than a simple
-bind-mount (the root filesystem is a read-only squashfs with no overlayfs support - see platform.md for the full
-story). `setup_etc.sh` dies with a clear message if `/data/etc-overrides/` is missing (run step 3 first). See
+ncdu not being built yet should never stand in the way of SSH access), runs `nshbox install -f` if `nshbox` is present,
+then hands off to `/data/bin/sshd.sh`, which does everything else needed on-device, every single time it runs: if
+Dropbear is already running (a live PID in `/tmp/dropbear.pid`), it does nothing and exits - safe to run `init.sh` again
+(or re-run `tc002_setup.sh`) without starting a second instance. Otherwise it first runs `/data/bin/setup_etc.sh`
+(pushed by step 3, above; also runnable on its own), which makes sure `/etc/passwd`, `/etc/group`, and
+`/etc/resolv.conf` are all in place - the device has none of these by default (see
+[platform.md](platform.md#verified-facts-one-tested-device)), and getting them there needs more than a simple bind-mount
+(the root filesystem is a read-only squashfs with no overlayfs support - see platform.md for the full story).
+`setup_etc.sh` dies with a clear message if `/data/etc-overrides/` is missing (run step 3 first). See
 [device_layout.md](device_layout.md#etcpasswd-etcgroup-etcresolvconf) for the exact content and why - in short,
-`nobody`/`nogroup` are needed for [nginx](../nginx/README.md), and `root` matches Dropbear's own synthetic-passwd
-entry (see [dropbear.md](dropbear.md#the-synthetic-passwd-patch)) exactly, so the two never disagree.
+`nobody`/`nogroup` are needed for [nginx](../components/nginx/README.md), and `root` matches Dropbear's own
+synthetic-passwd entry (see [dropbear.md](dropbear.md#the-synthetic-passwd-patch)) exactly, so the two never disagree.
 
 It then generates `/data/home/dropbear_ed25519_host_key` the first time it runs (never overwriting an existing one -
 see [device_layout.md](device_layout.md#host-key-location)) and prints its fingerprint - note it down; you will want

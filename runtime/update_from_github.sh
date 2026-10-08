@@ -10,7 +10,7 @@
 #
 # Uses nshbox's own "wget" (TLS + CA-bundle verification, redirect
 # following, and download+verify-in-one-pass via --sha256 <hex> - see
-# ../nshbox/README.md) against the same per-asset ".sha256" sidecar files
+# ../components/nshbox/README.md) against the same per-asset ".sha256" sidecar files
 # ../create_release_taz.sh already publishes for every release - no new
 # release-pipeline work, no separately-pinned checksum manifest, same trust
 # model as pull-release.sh: this project's own releases, GitHub's own

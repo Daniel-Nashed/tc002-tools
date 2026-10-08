@@ -1,6 +1,6 @@
 #!/bin/sh
 # A C compiler wrapper for nginx's cross-build ./configure (see
-# build/build_nginx.sh, which passes this as --with-cc).
+# components/nginx/build_arm.sh, which passes this as --with-cc).
 #
 # nginx's configure compiles small test programs and RUNS them ("objs/autotest"),
 # even with --crossbuild - impossible for an ARM binary on an x86 build host
@@ -15,7 +15,7 @@
 # Every other compile and link - including the final "objs/nginx" - passes
 # through untouched.
 #
-# Environment (set by build_nginx.sh):
+# Environment (set by components/nginx/build_arm.sh):
 #   QEMU_CC_REAL   the real cross-compiler, e.g. arm-linux-musleabihf-gcc
 #   QEMU_SYSROOT   the toolchain's target sysroot (holds lib/ld-musl-armhf.so.1)
 

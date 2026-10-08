@@ -11,7 +11,7 @@
 # README for why IT is separate).
 #
 # Ubuntu, specifically - not Alpine: this harness diffs nshbox's own output
-# against real GNU coreutils/tar/grep (see nshbox/README.md's "GNU-coreutils-
+# against real GNU coreutils/tar/grep (see components/nshbox/README.md's "GNU-coreutils-
 # output-compatible" claims), and Alpine's own userland is BusyBox, not GNU -
 # the wrong reference tools entirely for that comparison. A current Ubuntu LTS
 # also has a native g++ and a current coreutils, and keeping test-only tooling
@@ -28,10 +28,10 @@ FROM ubuntu:${UBUNTU_VERSION}
 ARG DEBIAN_FRONTEND=noninteractive
 
 # build-essential: native gcc, g++, make, binutils - everything both
-# nshbox's own native test build (build/test_build_nshbox_native.sh, plain C)
+# nshbox's own native test build (components/nshbox/build_native.sh, plain C)
 # and the C++ test harness (tests/nshbox/) need. libmbedtls-dev: nshbox's
 # checksum commands use mbedTLS's digest functions, linked statically
-# (nshbox/src/makefile picks up libmbedcrypto.a), which needs the static
+# (components/nshbox/src/makefile picks up libmbedcrypto.a), which needs the static
 # library and headers present at build time. Real GNU
 # coreutils/tar/grep/sed/gzip are already part of any standard Ubuntu
 # image without any extra package - they are the "platform reference

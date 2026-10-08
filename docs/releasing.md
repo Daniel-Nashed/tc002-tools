@@ -1,17 +1,17 @@
 # Releasing
 
-A release is a snapshot of the core deliverables, built by GitHub Actions from a tag. The release version is the
-version of `nshbox`, the one tool this project maintains itself, and `nshbox/src/version.h` is the only place it is
+A release is a snapshot of the core deliverables, built by GitHub Actions from a tag. The release version is the version
+of `nshbox`, the one tool this project maintains itself, and `components/nshbox/src/version.h` is the only place it is
 set. The upstream tools keep their own versions; those are pinned in [build/versions.env](../build/versions.env).
 
 ## Making a release
 
-1. Set `NSHBOX_VERSION` in `nshbox/src/version.h` (`a.b.c`) and commit it.
+1. Set `NSHBOX_VERSION` in `components/nshbox/src/version.h` (`a.b.c`) and commit it.
 2. Run `./push-release.sh`. It writes `version.txt`, commits it if it changed, and re-creates and pushes the tag
    `v<version>`. Same helper as in nshgeoip and nshmqtt.
 3. On GitHub, publish a release for that tag. `release.yml` runs when a release is published or edited: it stops if the
-   tag does not match `nshbox/src/version.h`, builds everything in the prebuilt ARM image (`build.yml`, which uses
-   `image.yml`), and attaches the files below.
+   tag does not match `components/nshbox/src/version.h`, builds everything in the prebuilt ARM image (`build.yml`, which
+   uses `image.yml`), and attaches the files below.
 
 ## What is attached
 

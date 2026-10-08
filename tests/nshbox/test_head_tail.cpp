@@ -1,6 +1,6 @@
 // Compares nshbox's head/tail against real GNU coreutils head(1)/tail(1).
 // tail in particular is worth covering here: nshbox's own README
-// describes it as "fixed-size ring buffer" (see nshbox/src/nshbox.c) -
+// describes it as "fixed-size ring buffer" (see components/nshbox/src/nshbox.c) -
 // exactly the kind of implementation detail that is easy to get subtly
 // wrong (off-by-one on the wrap point, stale data left in the buffer),
 // so it is diffed against the real tool rather than trusted by inspection.

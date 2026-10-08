@@ -13,12 +13,12 @@
 #     per-deployment override: DNS_SERVERS in the config file, which
 #     generates its content instead of pushing the repo file as-is - see
 #     push_resolv_conf() below and tc002-tools.conf.example.
-#   - the CA trust bundle built by build/build_ca_bundle.sh to
+#   - the CA trust bundle built by components/ca-bundle/build_arm.sh to
 #     INSTALL_PREFIX/etc-overrides/ssl/certs/ca-certificates.crt - curl
 #     needs it on every invocation (see runtime/on-demand-run.sh's
 #     CURL_CA_BUNDLE export), nginx/the vendored openssl CLI may need it
 #     later for a TLS-client role
-#   - ncdu's terminfo entries (build/build_ncdu.sh's dist/ncdu-terminfo)
+#   - ncdu's terminfo entries (components/ncdu/build_arm.sh's dist/ncdu-terminfo)
 #     to INSTALL_PREFIX/share/terminfo
 #   - ncdu's own binary (INSTALL_PREFIX/bin/ncdu.bin) and runtime/ncdu.sh,
 #     a thin TERMINFO-setting wrapper deployed AS INSTALL_PREFIX/bin/ncdu
@@ -66,8 +66,8 @@ Usage: install_etc.sh [--device SERIAL] [--config FILE]
 
 Pushes runtime/setup_etc.sh to INSTALL_PREFIX/bin/setup_etc.sh,
 runtime/etc/{passwd,group,resolv.conf} plus the CA trust bundle (if
-build/build_ca_bundle.sh has been run) to INSTALL_PREFIX/etc-overrides/ as staged
-defaults, ncdu's terminfo data and its binary+wrapper (if build_ncdu.sh
+components/ca-bundle/build_arm.sh has been run) to INSTALL_PREFIX/etc-overrides/ as staged
+defaults, ncdu's terminfo data and its binary+wrapper (if components/ncdu/build_arm.sh
 has been run) to INSTALL_PREFIX/share/terminfo and
 INSTALL_PREFIX/bin/{ncdu.bin,ncdu} - always overwriting whatever was
 staged there before. Then runs setup_etc.sh itself on the device
@@ -180,8 +180,8 @@ push_resolv_conf()
   rm -f "$generated"
 }
 
-# The CA bundle is its own build step (build/build_ca_bundle.sh), NOT part
-# of build_openssl.sh - OpenSSL ships no root CA data of its own (confirmed
+# The CA bundle is its own build step (components/ca-bundle/build_arm.sh), NOT part
+# of components/openssl/build_arm.sh - OpenSSL ships no root CA data of its own (confirmed
 # directly in its source), and producing the bundle is just a "cp" from
 # this container's own OS trust store, with zero dependency on actually
 # compiling OpenSSL (a much slower, genuinely optional component). This
@@ -190,21 +190,21 @@ push_resolv_conf()
 # gets working HTTPS whether or not the OpenSSL CLI itself was ever built -
 # confirmed as a real, not hypothetical, failure otherwise ("mbedTLS:
 # error reading CA cert file" on a real device). Skipped with a log line,
-# not an error, if build_ca_bundle.sh has not been run yet - same idiom as
+# not an error, if components/ca-bundle/build_arm.sh has not been run yet - same idiom as
 # everything else here that depends on an optional build artifact.
 push_ca_bundle()
 {
   local src="${DIST_DIR}/ca-bundle/etc/ssl/certs/ca-certificates.crt"
 
   if [ ! -f "$src" ]; then
-    log "skipping CA bundle: ${src} not built yet (run build/build_ca_bundle.sh)"
+    log "skipping CA bundle: ${src} not built yet (run components/ca-bundle/build_arm.sh)"
     return
   fi
 
   push_etc_override "ssl/certs/ca-certificates.crt" "$src"
 }
 
-# ncdu's terminfo entries (build/build_ncdu.sh's dist/ncdu-terminfo,
+# ncdu's terminfo entries (components/ncdu/build_arm.sh's dist/ncdu-terminfo,
 # packaged from the build container's own terminfo database) - a handful
 # of small text files, so "just files" the same way passwd/group/
 # resolv.conf/the CA bundle are, not something that needs its own later,
@@ -244,7 +244,7 @@ push_terminfo()
   local tar_check
 
   if [ ! -d "$src_dir" ]; then
-    log "skipping ncdu terminfo: ${src_dir} not built yet (run build/build_ncdu.sh)"
+    log "skipping ncdu terminfo: ${src_dir} not built yet (run components/ncdu/build_arm.sh)"
     return
   fi
 
@@ -288,7 +288,7 @@ push_ncdu()
   local src="${DIST_DIR}/ncdu"
 
   if [ ! -f "$src" ]; then
-    log "skipping ncdu: ${src} not built yet (run build/build_ncdu.sh)"
+    log "skipping ncdu: ${src} not built yet (run components/ncdu/build_arm.sh)"
     return
   fi
 

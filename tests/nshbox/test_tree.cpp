@@ -1,10 +1,10 @@
 // Compares nshbox's tree against real tree(1) - a raw diff, not field
 // extraction, since nshbox's tree was deliberately modeled to match real
 // tree's own box-drawing connectors and "N directories, M files" summary
-// convention (see nshbox/src/nshbox.c's tree_walk()/cmd_tree()). Fixtures
+// convention (see components/nshbox/src/nshbox.c's tree_walk()/cmd_tree()). Fixtures
 // here never include dotfiles - real tree hides them by default and
 // nshbox's tree never does (a documented, deliberate difference - see
-// nshbox/README.md's "tree" section), so a raw diff would otherwise
+// components/nshbox/README.md's "tree" section), so a raw diff would otherwise
 // fail on that difference alone, not a real bug.
 #include "framework.hpp"
 #include "run_command.hpp"

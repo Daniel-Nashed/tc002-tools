@@ -163,7 +163,7 @@ require_device()
 #                                                        install_awtrix_autostart.sh, skipped with
 #                                                        a log line on a non-AWTRIX device)
 # vim (+vim.bin, wrapper, defaults.vim)                 persistent - OPTIONAL, not
-#                                                        built by default (./build_vim.sh); ~1.4 MB
+#                                                        built by default (./components/vim/build.sh); ~1.4 MB
 #                                                        static but kept persistent, not
 #                                                        compressed-on-demand, since it owns
 #                                                        vi/edit and those need to start instantly;
@@ -368,7 +368,7 @@ on_demand_tools()
 # Where each on-demand tool's built artifact actually lives under dist/ -
 # a flat "${DIST_DIR}/${name}" for most (curl, nginx, 7zz), but openssl's
 # CLI binary sits nested inside its own sdk/device tree
-# (see build_openssl.sh's own layout comments), not at a top-level
+# (see components/openssl/build_arm.sh's own layout comments), not at a top-level
 # "dist/openssl" - that path is already the whole openssl build's output
 # directory, not a single file. install_on_demand.sh uses this instead of
 # assuming every tool is flat.
@@ -386,7 +386,7 @@ on_demand_source_path()
 
 # Extra device-side symlink name(s) for an on-demand tool, beyond its own
 # real name - e.g. "7z" as a shorter, commonly-typed alias for 7-Zip's
-# real upstream binary name "7zz" (see 7zip/README.md). Empty means no
+# real upstream binary name "7zz" (see components/7zip/README.md). Empty means no
 # alias. runtime/on-demand-run.sh maps the alias back to the real name
 # itself (see its own comments), so both share one cached extraction;
 # install_on_demand.sh's link_tools() just needs to also point the alias

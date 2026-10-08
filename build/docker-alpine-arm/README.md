@@ -32,8 +32,8 @@ musl-cross-make checks the SHA-1 of every source tarball it downloads. Target
 ## Using it
 
 ```sh
-./build_nshbox.sh        # dist/nshbox
-./build_kilo.sh          # dist/kilo
+./components/nshbox/build.sh        # dist/nshbox
+./components/kilo/build.sh          # dist/kilo
 ./build_all.sh           # everything, both containers
 ```
 

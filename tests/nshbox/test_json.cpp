@@ -1,5 +1,5 @@
 // Exercises nshbox's own json pretty-printer - see json_pretty_print()/
-// cmd_json() in nshbox/src/nshbox.c. No JSON reference tool is guaranteed
+// cmd_json() in components/nshbox/src/nshbox.c. No JSON reference tool is guaranteed
 // present in this harness's own container (see build/docker-ubuntu's
 // Dockerfile), so expected output here is hardcoded rather than diffed
 // against one live - each case was independently cross-checked by hand

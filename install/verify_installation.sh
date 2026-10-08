@@ -172,7 +172,7 @@ verify_etc()
     verify_binary ca-certificates.crt "$ca_bundle" "ca-certificates.crt" \
       "${INSTALL_PREFIX}/etc-overrides/ssl/certs/ca-certificates.crt"
   else
-    log "SKIP: CA bundle not built yet (${ca_bundle} not found - run build/build_ca_bundle.sh)"
+    log "SKIP: CA bundle not built yet (${ca_bundle} not found - run components/ca-bundle/build_arm.sh)"
   fi
 }
 
@@ -263,7 +263,7 @@ verify_vim()
   fi
 
   if [ ! -f "${DIST_DIR}/vim" ]; then
-    die "--with-vim given but ${DIST_DIR}/vim not built - run ./build_vim.sh first"
+    die "--with-vim given but ${DIST_DIR}/vim not built - run ./components/vim/build.sh first"
   fi
 
   verify_binary vim "${DIST_DIR}/vim" "vim.bin"

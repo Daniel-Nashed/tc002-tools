@@ -1,6 +1,6 @@
 // Compares nshbox's find against real GNU findutils find(1). Both walk
 // the exact same on-disk tree via readdir() (see find_walk() in
-// nshbox/src/nshbox.c), which returns entries in a stable but
+// components/nshbox/src/nshbox.c), which returns entries in a stable but
 // unspecified order - comparing sorted line sets rather than raw output
 // removes any dependency on that order matching between the two separate
 // process invocations, instead of just hoping it does.

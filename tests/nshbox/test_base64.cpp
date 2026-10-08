@@ -1,5 +1,5 @@
 // Compares nshbox's own base64 against real GNU base64(1)/basenc(1) - see
-// base64_encode_stream()/base64_decode_stream() in nshbox/src/nshbox.c, a
+// base64_encode_stream()/base64_decode_stream() in components/nshbox/src/nshbox.c, a
 // from-scratch RFC 4648 implementation (no OpenSSL involved - base64 is
 // not cryptography). Standard-alphabet cases diff against real "base64";
 // URL-safe ("-u") cases diff against real "basenc --base64url", since GNU
@@ -119,7 +119,7 @@ TEST_CASE(Base64UrlSafeRoundTrip, "base64: -u decode reverses -u encode")
 TEST_CASE(Base64DecodeToleratesMissingPadding, "base64: decode accepts a final group with no '=' padding")
 {
     // "aGVsbG8" (no trailing "=") decodes to "hello" under the lenient,
-    // JWT-style rule documented in nshbox/README.md - real GNU base64
+    // JWT-style rule documented in components/nshbox/README.md - real GNU base64
     // rejects this outright, so there is no reference tool to diff
     // against here; the expected value is just the known plaintext.
     auto actual = run_command(nshbox_path(), {"base64", "-d"}, "aGVsbG8");

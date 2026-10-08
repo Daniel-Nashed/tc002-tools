@@ -18,7 +18,7 @@
 /data/etc-overrides/passwd         (staged default, pushed by install_etc.sh - see below)
 /data/etc-overrides/group          (staged default, pushed by install_etc.sh - see below)
 /data/etc-overrides/resolv.conf    (staged default, pushed by install_etc.sh - see below)
-/data/etc-overrides/ssl/certs/ca-certificates.crt  (staged default, from build_openssl.sh - see "Deployment modes")
+/data/etc-overrides/ssl/certs/ca-certificates.crt  (staged default, from components/openssl/build_arm.sh - see "Deployment modes")
 /data/bin/nshbox                   (optional component)
 /data/bin/kilo                     (optional component)
 /data/bin/gzip                     (optional component - also the compressed-on-demand tier's decompressor)
@@ -172,35 +172,34 @@ installed; the workflow for actually using them is still to be designed.
 
 ## ncdu wrapper and terminfo
 
-`ncdu` is statically linked against `ncursesw` (see [../ncdu/README.md](../ncdu/README.md)), but static linking only
-carries the library *code* into the binary - it does not embed the terminal *capability data* (terminfo), which
-ncurses always reads from files at runtime, and the TC002 has no terminfo database of its own (confirmed on-device:
-`Error opening terminal: xterm-256color.`).
+`ncdu` is statically linked against `ncursesw` (see [../components/ncdu/README.md](../components/ncdu/README.md)), but
+static linking only carries the library *code* into the binary - it does not embed the terminal *capability data*
+(terminfo), which ncurses always reads from files at runtime, and the TC002 has no terminfo database of its own
+(confirmed on-device: `Error opening terminal: xterm-256color.`).
 
-`ncdu` is persistent, not compressed-on-demand like `curl`/`nginx`/`openssl` (see "Deployment modes" above) - at
-204 KB it is smaller than either of those by 5-16x, not worth the on-demand tier's own overhead.
-`install/install_etc.sh`'s `push_ncdu()` installs three things instead of one: the real binary at
-`/data/bin/ncdu.bin`, a handful of terminfo entries (`xterm-256color`, `xterm`, `vt100`, `screen-256color`, `linux` -
-packaged into `dist/ncdu-terminfo` by `build/build_ncdu.sh`'s `package_terminfo()`, from the build container's own
-terminfo database) at `/data/share/terminfo`, and `runtime/ncdu.sh` - a thin wrapper, deployed as `/data/bin/ncdu`
-itself - that sets `TERMINFO=/data/share/terminfo` before `exec`ing `ncdu.bin`. Plain `ncdu` on the device just
-works this way, regardless of what `$TERM` the connecting SSH client sends, with no manual step - the same
-reasoning `sshd.sh` already established for Dropbear: keep every executable a user actually runs directly under
-`/data/bin`, with any device-specific setup handled inside the script itself rather than left as a step the
-operator has to remember.
+`ncdu` is persistent, not compressed-on-demand like `curl`/`nginx`/`openssl` (see "Deployment modes" above) - at 204 KB
+it is smaller than either of those by 5-16x, not worth the on-demand tier's own overhead. `install/install_etc.sh`'s
+`push_ncdu()` installs three things instead of one: the real binary at `/data/bin/ncdu.bin`, a handful of terminfo
+entries (`xterm-256color`, `xterm`, `vt100`, `screen-256color`, `linux` - packaged into `dist/ncdu-terminfo` by
+`components/ncdu/build_arm.sh`'s `package_terminfo()`, from the build container's own terminfo database) at
+`/data/share/terminfo`, and `runtime/ncdu.sh` - a thin wrapper, deployed as `/data/bin/ncdu` itself - that sets
+`TERMINFO=/data/share/terminfo` before `exec`ing `ncdu.bin`. Plain `ncdu` on the device just works this way, regardless
+of what `$TERM` the connecting SSH client sends, with no manual step - the same reasoning `sshd.sh` already established
+for Dropbear: keep every executable a user actually runs directly under `/data/bin`, with any device-specific setup
+handled inside the script itself rather than left as a step the operator has to remember.
 
 The terminfo entries themselves are pushed as a **single tar archive**, built with real host `tar` and extracted
 on-device via `/data/bin/tar` (nshbox's own `tar` applet, invoked by its absolute path, never `nshbox tar` - see
-[nshbox/README.md](../nshbox/README.md#tar)), then deleted - not N separate `adb push` calls, one per file, the
-way an earlier version of `push_terminfo()` did it. That per-file approach turned out to be genuinely unreliable,
-not just theoretically so: confirmed directly on the real device (2026-09-13), of 5 individual `adb push` calls in
-a loop only the *last* one's file ever actually landed - `adb push`'s own per-call exit status cannot be trusted
-here any more than `adb connect`'s or `adb shell test -f`'s can (see `require_device()`/`push_etc_override()` in
+[../components/nshbox/README.md](../components/nshbox/README.md#tar)), then deleted - not N separate `adb push` calls, one
+per file, the way an earlier version of `push_terminfo()` did it. That per-file approach turned out to be genuinely
+unreliable, not just theoretically so: confirmed directly on the real device (2026-09-13), of 5 individual `adb push`
+calls in a loop only the *last* one's file ever actually landed - `adb push`'s own per-call exit status cannot be
+trusted here any more than `adb connect`'s or `adb shell test -f`'s can (see `require_device()`/`push_etc_override()` in
 `install/common.sh` for the same established pattern). This is also why `install/deploy.sh` now installs
-`nshbox`/`kilo`/`gzip` (`install_tools.sh`) *before* laying out `/etc` (`install_etc.sh`): the terminfo extraction
-needs `/data/bin/tar` to already exist, and `install_etc.sh` also now runs `setup_etc.sh` directly on the device
-(see "etcpasswd-etcgroup-etcresolvconf" above), which needs nshbox's own `grep` applet - this device has no other
-`grep` in `PATH` at all (see "PATH" below), independent of whichever `PATH` a given invocation happens to have.
+`nshbox`/`kilo`/`gzip` (`install_tools.sh`) *before* laying out `/etc` (`install_etc.sh`): the terminfo extraction needs
+`/data/bin/tar` to already exist, and `install_etc.sh` also now runs `setup_etc.sh` directly on the device (see
+"etcpasswd-etcgroup-etcresolvconf" above), which needs nshbox's own `grep` applet - this device has no other `grep` in
+`PATH` at all (see "PATH" below), independent of whichever `PATH` a given invocation happens to have.
 
 ## disable_adb.sh
 
@@ -241,12 +240,12 @@ their own dedicated handling (`install_dropbear.sh`, and ncdu's own functions in
 
 `tc002-discover` is **not** in this table at all - it never touches the
 device in the first place, see
-[`../tc002-discover/README.md`](../tc002-discover/README.md). 7-Zip used
+[`../components/tc002-discover/README.md`](../components/tc002-discover/README.md). 7-Zip used
 to be excluded the same way (built and pushed by hand, never through
 `deploy.sh`) but now joins the compressed-on-demand tier above like any
-other optional tool - see [`../7zip/README.md`](../7zip/README.md) for
+other optional tool - see [`../components/7zip/README.md`](../components/7zip/README.md) for
 why it wasn't automated sooner, and `./build_all.sh --with-7zip` (or
-`./build_7zip.sh` directly) to build it.
+`./components/7zip/build.sh` directly) to build it.
 
 **persistent** - `INSTALL_PREFIX/bin/<tool>` (`/data/bin/<tool>`), pushed by
 `install/install_binary()` and surviving reboot. This is every mode this
@@ -281,7 +280,7 @@ idea `nshbox install` already uses for its own applet symlinks. Running
 `curl` (say) on the device: the wrapper decompresses that one member out
 of the shared archive into `/tmp/bin/curl` (via
 `nshbox tar -xzf .../on-demand.tar.gz -C /tmp/bin curl` - see
-[`../nshbox/README.md`](../nshbox/README.md) for `tar`'s `-z` support and
+[`../components/nshbox/README.md`](../components/nshbox/README.md) for `tar`'s `-z` support and
 its selective-extraction error handling) **every time** `curl` runs
 and it is not already there, runs it, and **deletes the unpacked copy when the tool exits** (exit status passed
 on; also on Ctrl-C). Before unpacking it checks that at least 6 MiB of memory is available and stops with a clear
@@ -339,13 +338,12 @@ adding real diagnostics back in.
 
 ### vim
 
-OPTIONAL - not everyone wants the flash space spent on a second editor beyond kilo, so unlike
-every other optional component in this project, **building it does not imply deploying it**: `./build_vim.sh`
-builds AND pushes in one command (both steps run on the host - the build container has no path to the device at
-all), but it is never run by `deploy.sh` itself. See [`../build/build_vim.sh`](../build/build_vim.sh) for the full
-cross-compile story (`--with-features=tiny`, `--with-tlib=ncursesw` to work around a real vim cross-compile
-failure mode, static, ~1.4 MB stripped) and [`../install/install_vim.sh`](../install/install_vim.sh) for what
-gets pushed:
+OPTIONAL - not everyone wants the flash space spent on a second editor beyond kilo, so unlike every other optional
+component in this project, **building it does not imply deploying it**: `./components/vim/build.sh` builds AND pushes in
+one command (both steps run on the host - the build container has no path to the device at all), but it is never run by
+`deploy.sh` itself. See [`../components/vim/build_arm.sh`](../components/vim/build_arm.sh) for the full cross-compile
+story (`--with-features=tiny`, `--with-tlib=ncursesw` to work around a real vim cross-compile failure mode, static, ~1.4
+MB stripped) and [`../install/install_vim.sh`](../install/install_vim.sh) for what gets pushed:
 
 - `INSTALL_PREFIX/bin/vim.bin` - the real binary.
 - `INSTALL_PREFIX/bin/vim` - [`../runtime/vim.sh`](../runtime/vim.sh), a thin wrapper setting `TERMINFO` (the same
@@ -380,12 +378,12 @@ update-from-github [VERSION|latest] [--repo OWNER/REPO]
 Updates whichever of `dropbearmulti`, `nshbox`, `kilo`, `gzip` and `ncdu`'s binary (installed as `ncdu.bin`, same as
 `install_etc.sh` - `ncdu`'s wrapper script and terminfo are untouched) are **already installed** on this particular
 device - this is an update, not an install: a tool this device was never given (e.g. `ncdu`, on a flash-space-conscious
-deployment) is skipped, not added. Uses `nshbox wget` (TLS + CA-bundle
-verification, redirect following - see [`../nshbox/README.md`](../nshbox/README.md)) against the same
-per-asset `.sha256` sidecar files every release already publishes (see [`releasing.md`](releasing.md)) - no separate
-checksum manifest, same trust model as `pull-release.sh`. With no version given (or `latest` explicitly), the real
-tag is read off `wget`'s own redirect-notice line when it follows `github.com/<repo>/releases/latest` - nshbox has
-no JSON parsing, so this avoids needing the GitHub API or `jq` on-device for that one field.
+deployment) is skipped, not added. Uses `nshbox wget` (TLS + CA-bundle verification, redirect following - see
+[`../components/nshbox/README.md`](../components/nshbox/README.md)) against the same per-asset `.sha256` sidecar files
+every release already publishes (see [`releasing.md`](releasing.md)) - no separate checksum manifest, same trust model
+as `pull-release.sh`. With no version given (or `latest` explicitly), the real tag is read off `wget`'s own
+redirect-notice line when it follows `github.com/<repo>/releases/latest` - nshbox has no JSON parsing, so this avoids
+needing the GitHub API or `jq` on-device for that one field.
 
 Downloads and verifies every tool into a staging file (`.{name}.new`) next to its real target in
 `INSTALL_PREFIX/bin` before touching anything live; only once every download has verified does it `mv` each one onto
@@ -402,32 +400,32 @@ for no real payoff here) - get a newer copy of the script itself the normal way,
 
 ### Trusted root CA bundle
 
-`curl` (mbedTLS-backed - see [`../curl/README.md`](../curl/README.md)) and `nginx`/the vendored `openssl` CLI
-(OpenSSL-backed) both eventually need real root CA data to verify a TLS peer, and neither project ships any of its
-own - confirmed directly in both source trees. Rather than inventing a third, separately-maintained source, the
-bundle is this exact container's own `/etc/ssl/certs/ca-certificates.crt` (the Debian `ca-certificates` package,
+`curl` (mbedTLS-backed - see [`../components/curl/README.md`](../components/curl/README.md)) and `nginx`/the vendored
+`openssl` CLI (OpenSSL-backed) both eventually need real root CA data to verify a TLS peer, and neither project ships
+any of its own - confirmed directly in both source trees. Rather than inventing a third, separately-maintained source,
+the bundle is this exact container's own `/etc/ssl/certs/ca-certificates.crt` (the Debian `ca-certificates` package,
 already installed for the container's own HTTPS needs - naturally kept current every time the container image is
 rebuilt, and reflects whatever roots that environment's owner has actually configured, corporate-injected ones
 included).
 
-This is its **own** build step, [`../build/build_ca_bundle.sh`](../build/build_ca_bundle.sh) - deliberately not
-part of `build_openssl.sh`, even though it used to be. Producing the bundle is just one `cp`, with zero dependency
-on actually cross-compiling OpenSSL, so tying it to that much slower, genuinely optional build meant declining the
-OpenSSL CLI silently broke curl's HTTPS too - confirmed as a real failure, not a hypothetical one (`mbedTLS: error
-reading CA cert file ...: PK - Read/write of file failed` on a real device). `./build_all.sh` now builds the CA
-bundle unconditionally, alongside the other small/required components, regardless of whether `--with-openssl` was
-passed.
+This is its **own** build step, [`../components/ca-bundle/build_arm.sh`](../components/ca-bundle/build_arm.sh) -
+deliberately not part of `components/openssl/build_arm.sh`, even though it used to be. Producing the bundle is just one
+`cp`, with zero dependency on actually cross-compiling OpenSSL, so tying it to that much slower, genuinely optional
+build meant declining the OpenSSL CLI silently broke curl's HTTPS too - confirmed as a real failure, not a hypothetical
+one (`mbedTLS: error reading CA cert file ...: PK - Read/write of file failed` on a real device). `./build_all.sh` now
+builds the CA bundle unconditionally, alongside the other small/required components, regardless of whether
+`--with-openssl` was passed.
 
-`install/install_etc.sh`'s `push_ca_bundle()` stages it at
-`INSTALL_PREFIX/etc-overrides/ssl/certs/ca-certificates.crt` via the same `push_etc_override()` mechanism used for
-`passwd`/`group`/`resolv.conf` (see above) - grouped with them, not with `install_on_demand.sh`'s curl/nginx
-bundling, because it is just as much "a single file" as they are (unlike `ncdu`'s terminfo data, a whole directory
-tree that genuinely needs its own, later, conditional step - piping a tar over `adb` is not binary-safe, see
-[`../nshbox/README.md`](../nshbox/README.md)). Independent of which (if any) compressed-on-demand tool is actually
-bundled, and always refreshed on every run (unlike `passwd`/`group`/`resolv.conf`, this is build output, not an
-on-device customization point). `runtime/on-demand-run.sh` points `curl` at the real post-bootstrap path,
-`/etc/ssl/certs/ca-certificates.crt`, via `CURL_CA_BUNDLE` - the same path OpenSSL's own `--openssldir=/etc/ssl`
-default already expects, so `nginx` and the `openssl` CLI need no extra configuration to find it later either.
+`install/install_etc.sh`'s `push_ca_bundle()` stages it at `INSTALL_PREFIX/etc-overrides/ssl/certs/ca-certificates.crt`
+via the same `push_etc_override()` mechanism used for `passwd`/`group`/`resolv.conf` (see above) - grouped with them,
+not with `install_on_demand.sh`'s curl/nginx bundling, because it is just as much "a single file" as they are (unlike
+`ncdu`'s terminfo data, a whole directory tree that genuinely needs its own, later, conditional step - piping a tar over
+`adb` is not binary-safe, see [`../components/nshbox/README.md`](../components/nshbox/README.md)). Independent of which
+(if any) compressed-on-demand tool is actually bundled, and always refreshed on every run (unlike
+`passwd`/`group`/`resolv.conf`, this is build output, not an on-device customization point). `runtime/on-demand-run.sh`
+points `curl` at the real post-bootstrap path, `/etc/ssl/certs/ca-certificates.crt`, via `CURL_CA_BUNDLE` - the same
+path OpenSSL's own `--openssldir=/etc/ssl` default already expects, so `nginx` and the `openssl` CLI need no extra
+configuration to find it later either.
 
 ## PATH
 

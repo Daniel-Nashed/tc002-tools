@@ -52,7 +52,7 @@ NAME="${0##*/}"
 
 # A handful of vendored tools have a shorter/older name people commonly
 # type by habit even though the real upstream binary uses a different one
-# - "7z" for 7-Zip's real "7zz" (see 7zip/README.md - the modern combined
+# - "7z" for 7-Zip's real "7zz" (see components/7zip/README.md - the modern combined
 # CLI, replacing the older separate 7za/7zr/p7zip "7z" names people still
 # reach for out of habit). Mapped here, once, rather than bundling the
 # archive member under two names.
@@ -93,7 +93,7 @@ if [ ! -x "$BIN" ]; then
   UNPACKED=1
 fi
 
-# curl links against mbedTLS (see ../curl/README.md), which - unlike
+# curl links against mbedTLS (see ../components/curl/README.md), which - unlike
 # OpenSSL - has no OS-style auto-discovered trust store. CURL_CA_BUNDLE is
 # the curl command-line tool's own environment-variable convention for
 # this (checked by curl itself, independent of TLS backend), so no

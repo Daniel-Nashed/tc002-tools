@@ -10,7 +10,7 @@
 #
 # Alpine + musl, specifically: produces a genuinely portable static
 # binary with none of the NSS/glibc-version caveats a static glibc build
-# carries (see 7zip/README.md's own "getpwuid/getgrgid" static-linking
+# carries (see components/7zip/README.md's own "getpwuid/getgrgid" static-linking
 # story) - musl was designed for exactly this. Pinned to a specific
 # release (not "latest"), matching this project's pin-everything
 # discipline elsewhere, even though this is a host tool, not a device
@@ -23,7 +23,7 @@ ARG ALPINE_VERSION
 FROM alpine:${ALPINE_VERSION}
 
 # build-base: gcc, musl-dev (headers + static libc.a), make, binutils -
-# everything "cc -Os -static -s" needs. bash: build_tc002-discover.sh
+# everything "cc -Os -static -s" needs. bash: components/tc002-discover/build_native.sh
 # sources build/common.sh like every other build_*.sh here, which uses
 # bash-only syntax (set -o pipefail, local) - Alpine's default shell is
 # BusyBox ash, not bash. file: for verify_artifact()-style checks

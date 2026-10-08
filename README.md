@@ -50,9 +50,9 @@ Built and deployed by default, no flags needed - see
 | Component                                                                      | What it provides                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Dropbear** (`dropbear`, `scp`, `dropbearkey`, `dbclient`, `dropbearconvert`) | Minimal SSH server for the TC002's ARMHF environment, public-key authentication only (see [docs/dropbear.md](docs/dropbear.md)); `scp` for file transfer (Dropbear has no SFTP server); `dbclient`, Dropbear's own SSH client, for outgoing connections *from* the device; `dropbearconvert` for converting keys between Dropbear's native format and OpenSSH's. Host key generated on-device on first run, so the private key never exists anywhere else.     |
-| **nshbox**                                                                     | Independent multi-call diagnostic toolbox - system/process info, TCP socket listing, a symlink target reader, GNU-coreutils-output-compatible checksum commands, and a minimal `tar` with gzip support (`-f -` for piping over SSH), among many more commands - see [nshbox/README.md](nshbox/README.md). Links against the device's own (ancient, 1.1.0i) OpenSSL for its checksum commands - independent of nginx's own, much newer, vendored OpenSSL below. |
-| **kilo**                                                                       | Small terminal text editor ([antirez/kilo](https://github.com/antirez/kilo)) - see [kilo/README.md](kilo/README.md).                                                                                                                                                                                                                                                                                                                                           |
-| **ncdu**                                                                       | Interactive ncurses-based disk usage browser ([dev.yorhel.nl/ncdu](https://dev.yorhel.nl/ncdu)) - see [ncdu/README.md](ncdu/README.md). Statically links `ncurses`, unlike everything else here.                                                                                                                                                                                                                                                               |
+| **nshbox**                                                                     | Independent multi-call diagnostic toolbox - system/process info, TCP socket listing, a symlink target reader, GNU-coreutils-output-compatible checksum commands, and a minimal `tar` with gzip support (`-f -` for piping over SSH), among many more commands - see [components/nshbox/README.md](components/nshbox/README.md). Links against the device's own (ancient, 1.1.0i) OpenSSL for its checksum commands - independent of nginx's own, much newer, vendored OpenSSL below. |
+| **kilo**                                                                       | Small terminal text editor ([antirez/kilo](https://github.com/antirez/kilo)) - see [components/kilo/README.md](components/kilo/README.md).                                                                                                                                                                                                                                                                                                                                           |
+| **ncdu**                                                                       | Interactive ncurses-based disk usage browser ([dev.yorhel.nl/ncdu](https://dev.yorhel.nl/ncdu)) - see [components/ncdu/README.md](components/ncdu/README.md). Statically links `ncurses`, unlike everything else here.                                                                                                                                                                                                                                                               |
 | **gzip**                                                                       | Compressor - also the compressed-on-demand tier's own decompressor (see below), which is why it stays persistent rather than on-demand itself.                                                                                                                                                                                                                                                                                                                 |
 
 ### Optional, compressed-on-demand components
@@ -63,10 +63,10 @@ first use per tool - see [docs/device_layout.md](docs/device_layout.md#deploymen
 
 | Component         | What it provides                                                                                                                                                                                                                                                  | How it's built                                                                             |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| **curl**          | HTTP(S) client, with [mbedTLS](mbedtls/README.md) (vendored and cross-built here too, purely as curl's TLS backend - not a deliverable of its own) - see [curl/README.md](curl/README.md).                                                                        | `./build_all.sh --with-curl` (builds mbedTLS first automatically)                          |
-| **nginx**         | Minimal web server with no PCRE/rewrite, with [OpenSSL](openssl/README.md) (vendored and cross-built here too, purely as nginx's TLS backend - not a deliverable of its own, statically linked, same as curl's mbedTLS) - see [nginx/README.md](nginx/README.md). | `./build_all.sh --with-nginx` (requires OpenSSL already built - see [Building](#building)) |
-| **openssl**       | The OpenSSL CLI tool itself (`openssl` command), deployed as its own on-demand tool - separate from nginx's own vendored TLS backend above, built by the same `openssl/` component - see [openssl/README.md](openssl/README.md).                                  | `./build_all.sh --with-openssl`                                                            |
-| **7-Zip** (`7zz`) | Archive tool with broader format support than gzip (`.7z`, `.zip`, `.tar`, and more), better compression via LZMA2, and AES-256 archive encryption - see [7zip/README.md](7zip/README.md).                                                                        | `./build_all.sh --with-7zip`                                                               |
+| **curl**          | HTTP(S) client, with [mbedTLS](components/mbedtls/README.md) (vendored and cross-built here too, purely as curl's TLS backend - not a deliverable of its own) - see [components/curl/README.md](components/curl/README.md).                                                                        | `./build_all.sh --with-curl` (builds mbedTLS first automatically)                          |
+| **nginx**         | Minimal web server with no PCRE/rewrite, with [OpenSSL](components/openssl/README.md) (vendored and cross-built here too, purely as nginx's TLS backend - not a deliverable of its own, statically linked, same as curl's mbedTLS) - see [components/nginx/README.md](components/nginx/README.md). | `./build_all.sh --with-nginx` (requires OpenSSL already built - see [Building](#building)) |
+| **openssl**       | The OpenSSL CLI tool itself (`openssl` command), deployed as its own on-demand tool - separate from nginx's own vendored TLS backend above, built by the same `components/openssl/` component - see [components/openssl/README.md](components/openssl/README.md).                                  | `./build_all.sh --with-openssl`                                                            |
+| **7-Zip** (`7zz`) | Archive tool with broader format support than gzip (`.7z`, `.zip`, `.tar`, and more), better compression via LZMA2, and AES-256 archive encryption - see [components/7zip/README.md](components/7zip/README.md).                                                                        | `./build_all.sh --with-7zip`                                                               |
 
 ### Optional, separately-deployed component
 
@@ -77,7 +77,7 @@ own deliberate, per-device decision, run separately. Persistent, not compressed-
 
 | Component | What it provides                                                                                                                                                                                                                                                                                  | How it's built and deployed                                        |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| **vim**   | Real, modal vi/vim editing (`--with-features=tiny`, ~1.4 MB fully static). Overwrites `vi`/`edit` to point at it instead of kilo once deployed; `vicfg` opens its settings file directly, never overwritten once it exists - see [docs/device_layout.md](docs/device_layout.md#vim). | `./build_vim.sh` (builds AND pushes it - see its own comments)     |
+| **vim**   | Real, modal vi/vim editing (`--with-features=tiny`, ~1.4 MB fully static). Overwrites `vi`/`edit` to point at it instead of kilo once deployed; `vicfg` opens its settings file directly, never overwritten once it exists - see [docs/device_layout.md](docs/device_layout.md#vim). | `./components/vim/build.sh` (builds AND pushes it - see its own comments)     |
 
 ## Building
 
@@ -88,32 +88,34 @@ own deliberate, per-device decision, run separately. Persistent, not compressed-
 1. Builds every [core component](#core-components) listed above, all inside a disposable container, never on your
    host.
 2. Also builds the CA trust bundle - a plain `cp` from the build container's own OS trust store, near-instant, not
-   listed as its own component above since it's not a tool - see [build/build_ca_bundle.sh](build/build_ca_bundle.sh).
+   listed as its own component above since it's not a tool - see
+   [components/ca-bundle/build_arm.sh](components/ca-bundle/build_arm.sh).
 
-Each component also has its own standalone script (`./build_all.sh build/build_dropbear.sh`, etc.); `./verify.sh`
-checks the results (ARM EABI hard-float, fully static, stripped) without needing the device. See
+Every component lives in its own directory under [components/](components/), together with its README and its build
+scripts, and can be built on its own (`components/dropbear/build.sh`, etc.); `./verify.sh` checks the results (ARM
+EABI hard-float, fully static, stripped) without needing the device. See
 [docs/build_platform.md](docs/build_platform.md); what changed in the move to one static musl build, and how it works
 now, is in [docs/musl_migration.md](docs/musl_migration.md).
 
-The [optional, compressed-on-demand components](#optional-compressed-on-demand-components) above do not build by
-default - each opts in with its own flag, shown in that table's "How it's built" column. Combine any subset
-(`./build_all.sh --with-curl --with-openssl`), or use `--all` to build all four in one go. `./build_all.sh
-build/build_nginx.sh` does **not** build [OpenSSL](openssl/README.md) automatically - it fails fast if that has not
-already been run, since OpenSSL's own build takes real, non-trivial time and always does a full clean rebuild, so
-re-running it on every nginx iteration would be pure waste - see [nginx/README.md](nginx/README.md).
+The [optional, compressed-on-demand components](#optional-compressed-on-demand-components) above do not build by default
+- each opts in with its own flag, shown in that table's "How it's built" column. Combine any subset
+(`./build_all.sh --with-curl --with-openssl`), or use `--all` to build all four in one go. `components/nginx/build.sh`
+does **not** build [OpenSSL](components/openssl/README.md) automatically - it fails fast if that has not already been
+run, since OpenSSL's own build takes real, non-trivial time and always does a full clean rebuild, so re-running it on
+every nginx iteration would be pure waste - see [components/nginx/README.md](components/nginx/README.md).
 
-`tc002-discover` is different again - it's a host-side discovery tool, not a TC002 deliverable at all, so it will
-never be part of `./build_all.sh`'s device-build pipeline regardless. Run `./build_tc002-discover.sh` on its own - see
-[tc002-discover/README.md](tc002-discover/README.md) for why it builds natively (via a separate Alpine container)
-instead of cross-compiling for the device like everything else here.
+`tc002-discover` is different again - it's a host-side discovery tool, not a TC002 deliverable at all, so it will never
+be part of `./build_all.sh`'s device-build pipeline regardless. Run `./components/tc002-discover/build.sh` on its own -
+see [components/tc002-discover/README.md](components/tc002-discover/README.md) for why it builds natively (via a
+separate Alpine container) instead of cross-compiling for the device like everything else here.
 
-(`./test_build_nshbox_native.sh` is the one script deliberately excluded from `./build_all.sh` permanently - a local native
-dev-only test build, not a deliverable - see [nshbox/README.md](nshbox/README.md).)
+(`./components/nshbox/test_build_native.sh` is the one script deliberately excluded from `./build_all.sh` permanently -
+a local native dev-only test build, not a deliverable - see [components/nshbox/README.md](components/nshbox/README.md).)
 
 ## Testing
 
 ```sh
-./test_nshbox.sh
+./components/nshbox/test.sh
 ```
 
 Builds nshbox natively and runs its functional test suite against it ([tests/nshbox/](tests/nshbox/README.md)) - a
@@ -149,8 +151,8 @@ yourself:
 
 Runs on your host, not in the build container - talks to a real device over ADB. One run does everything:
 
-1. **Finds the device** - using this project's own [tc002-discover](tc002-discover/README.md) (building it first,
-   after asking, if it isn't built yet), and writes its IP/hostname into `config/tc002-tools.conf` (created from
+1. **Finds the device** - using this project's own [tc002-discover](components/tc002-discover/README.md) (building it
+   first, after asking, if it isn't built yet), and writes its IP/hostname into `config/tc002-tools.conf` (created from
    `config/tc002-tools.conf.example` if it doesn't exist yet) - see [docs/device_layout.md](docs/device_layout.md).
    Refuses to guess if more than one TC002 answers - it lists what it found and asks you to pick one (`--serial`/
    `--mac`/`--name`) instead of silently configuring the wrong device. Set `DEVICE` in the config instead to skip

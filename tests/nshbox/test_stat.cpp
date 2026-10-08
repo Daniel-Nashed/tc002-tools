@@ -1,6 +1,6 @@
 // Compares nshbox's stat against real GNU coreutils stat(1) - field by
 // field, not a raw diff. nshbox's own output format (see cmd_stat() in
-// nshbox/src/nshbox.c) is intentionally its own thing, not GNU stat's
+// components/nshbox/src/nshbox.c) is intentionally its own thing, not GNU stat's
 // default text layout, so this extracts specific numbers from each
 // side's very differently-formatted output and compares those instead:
 // real stat via its own --format=, nshbox's own custom "  Label: value"

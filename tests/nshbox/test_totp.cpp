@@ -102,7 +102,7 @@ TEST_CASE(TotpRfc6238Sha512Vectors, "totp: matches all six RFC 6238 SHA512 test 
 TEST_CASE(TotpDefaultsMatchSha256SixDigits, "totp: default algorithm/digits/period is SHA256/6/30 (RFC vector truncated to 6)")
 {
     // Default algorithm is SHA256, not the more common SHA1 - deliberate, see
-    // nshbox/README.md's "totp" section (this is for a device-to-device
+    // components/nshbox/README.md's "totp" section (this is for a device-to-device
     // secret, not a phone authenticator app, so there is no reason to inherit
     // SHA1 as the default the way those apps do). 46119246 with the default 6
     // digits is the low 6 digits: 119246 (dynamic truncation mod 10^digits,

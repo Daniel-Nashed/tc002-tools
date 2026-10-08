@@ -1,5 +1,5 @@
 // Compares nshbox's which against real which(1) - both just search $PATH
-// for an executable (see cmd_which() in nshbox/src/nshbox.c).
+// for an executable (see cmd_which() in components/nshbox/src/nshbox.c).
 #include "framework.hpp"
 #include "run_command.hpp"
 #include "temp_fixture.hpp"

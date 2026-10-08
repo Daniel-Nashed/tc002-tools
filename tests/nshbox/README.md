@@ -1,23 +1,25 @@
 # tests/nshbox/ - nshbox functional test suite
 
 Diffs nshbox's own command output against real platform reference tools (GNU coreutils, GNU grep, GNU tar - see
-[nshbox/README.md](../../nshbox/README.md)'s "GNU-coreutils-output-compatible" language throughout) to check the
-reimplementations actually behave the way they claim to - not just that they compile and produce *some* output.
+[../../components/nshbox/README.md](../../components/nshbox/README.md)'s "GNU-coreutils-output-compatible" language
+throughout) to check the reimplementations actually behave the way they claim to - not just that they compile and
+produce *some* output.
 
 ## What to actually type
 
 ```sh
-./test_nshbox.sh
+./components/nshbox/test.sh
 ```
 
-Runs entirely inside a separate Ubuntu container - see [build/docker-ubuntu/README.md](../../build/docker-ubuntu/README.md)
-for why this needs a different container than the ARM cross-build one. One command: builds nshbox natively
-(dynamically linked, for the host's own architecture - not the ARM device binary, and deliberately not
-[build/test_build_nshbox_native.sh](../../build/test_build_nshbox_native.sh)'s statically-linked build, which exists to let
-that binary be copied out and run on an arbitrary host - this one never leaves the container it was built in, so
-plain dynamic linking is simpler and avoids a real link failure a static build hits against a modern OpenSSL 3.x, see
-[build/test_nshbox_functional.sh](../../build/test_nshbox_functional.sh)'s own comment), builds this test harness,
-and runs it - printing `PASS`/`FAIL` per test and a summary, with a non-zero exit code if anything failed.
+Runs entirely inside a separate Ubuntu container - see
+[build/docker-ubuntu/README.md](../../build/docker-ubuntu/README.md) for why this needs a different container than the
+ARM cross-build one. One command: builds nshbox natively (dynamically linked, for the host's own architecture - not the
+ARM device binary, and deliberately not [../../components/nshbox/build_native.sh](../../components/nshbox/build_native.sh)'s
+statically-linked build, which exists to let that binary be copied out and run on an arbitrary host - this one never
+leaves the container it was built in, so plain dynamic linking is simpler and avoids a real link failure a static build
+hits against a modern OpenSSL 3.x, see
+[../../components/nshbox/test_functional.sh](../../components/nshbox/test_functional.sh)'s own comment), builds this test
+harness, and runs it - printing `PASS`/`FAIL` per test and a summary, with a non-zero exit code if anything failed.
 
 ## Scope: what this does and does not prove
 
@@ -88,19 +90,18 @@ invocation a moment later is not guaranteed to still match), each test spawns an
 via `BackgroundProcess` (`background_process.hpp`/`.cpp`) and roots both tools at that PID - deterministic for as
 long as the fixture stays alive, sidestepping the live-state problem entirely rather than working around it.
 
-Needs the `psmisc` package explicitly added to
-[build/docker-ubuntu/Dockerfile](../../build/docker-ubuntu/Dockerfile) - like `tree`, `pstree` is not part of the
-base Ubuntu image. `-Uc` forces the same Unicode box-drawing nshbox's own pstree always uses and disables real
-pstree's default compaction of identical-named sibling subtrees into `N*[name]` - nshbox's own pstree does not
-implement that (only same-named *thread* merging within one process, `N*[{name}]`, which is a different, already-
-implemented thing - see the "pstree" section of [nshbox/README.md](../../nshbox/README.md)). Fixtures here
-deliberately use only distinctly-named children at every branching level to sidestep that gap, the same way
-`test_tree.cpp` sidesteps dotfiles - real `pstree` also sorts children alphabetically by name while nshbox
-enumerates `/proc` in whatever order the kernel returns, a second, separate gap fixtures avoid by spawning children
-in already-alphabetical order.
+Needs the `psmisc` package explicitly added to [build/docker-ubuntu/Dockerfile](../../build/docker-ubuntu/Dockerfile) -
+like `tree`, `pstree` is not part of the base Ubuntu image. `-Uc` forces the same Unicode box-drawing nshbox's own
+pstree always uses and disables real pstree's default compaction of identical-named sibling subtrees into `N*[name]` -
+nshbox's own pstree does not implement that (only same-named *thread* merging within one process, `N*[{name}]`, which is
+a different, already- implemented thing - see the "pstree" section of
+[../../components/nshbox/README.md](../../components/nshbox/README.md)). Fixtures here deliberately use only distinctly-named
+children at every branching level to sidestep that gap, the same way `test_tree.cpp` sidesteps dotfiles - real `pstree`
+also sorts children alphabetically by name while nshbox enumerates `/proc` in whatever order the kernel returns, a
+second, separate gap fixtures avoid by spawning children in already-alphabetical order.
 
 This diff-testing effort caught real, confirmed formatting bugs in nshbox's own box-drawing pstree renderer, all
-fixed in `nshbox/src/nshbox.c`: a shared `static` children buffer in `pstree_print_children()` that a nested
+fixed in `components/nshbox/src/nshbox.c`: a shared `static` children buffer in `pstree_print_children()` that a nested
 recursive call would silently overwrite while an outer call was still reading from it, corrupting later siblings'
 names/PIDs whenever an earlier sibling had children of its own; a single-child connector only one character wide
 where real pstree's is three (breaking alignment for anything branching deeper in the same chain); and a missing
@@ -131,16 +132,17 @@ parameterized tests, just "run this, assert on the result."
 - **`run_command()`** (`run_command.hpp`/`.cpp`) runs a real process (either nshbox itself or a reference tool) via
   `fork()`+`execvp()`+`pipe()` - not `popen()`/`system()`, so the argv vector reaches the child directly, never
   interpreted by a shell, matching this project's own reasoning for nshbox's tar-via-gzip design (see
-  [nshbox/src/nshbox.c](../../nshbox/src/nshbox.c)). Captures stdout/stderr separately and returns the exit code.
+  [../../components/nshbox/src/nshbox.c](../../components/nshbox/src/nshbox.c)). Captures stdout/stderr separately and returns
+  the exit code.
 - **`TempDir`** (`temp_fixture.hpp`/`.cpp`) is an RAII temporary directory - removed recursively when it goes out of
   scope, including when an `ASSERT_*` throws partway through a test, so a failing test never leaves fixtures behind
   for the next one to trip over. This is the actual payoff of using C++ classes for tests here.
 - **`ASSERT_EQ(actual, expected, context)`** / **`ASSERT_TRUE(condition, context)`** throw `TestFailure` on
   mismatch, caught by `TestRegistry::run_all()` so one failing assertion fails only its own test, not the whole run.
-- **`main.cpp`** takes the nshbox binary path as `argv[1]` (set by `build/test_nshbox_functional.sh`, never assumed)
-  and forces `LC_ALL=C` for the whole process before running anything - nshbox has no locale awareness at all (no
-  `setlocale()`/`strcoll()` anywhere in `nshbox.c`, confirmed), so this keeps the real reference tools' own collation
-  (`sort`, `grep`) matching nshbox's plain byte comparison regardless of the container image's default locale.
+- **`main.cpp`** takes the nshbox binary path as `argv[1]` (set by `components/nshbox/test_functional.sh`, never
+  assumed) and forces `LC_ALL=C` for the whole process before running anything - nshbox has no locale awareness at all
+  (no `setlocale()`/`strcoll()` anywhere in `nshbox.c`, confirmed), so this keeps the real reference tools' own
+  collation (`sort`, `grep`) matching nshbox's plain byte comparison regardless of the container image's default locale.
 
 ## Adding a test
 
@@ -166,4 +168,4 @@ TEST_CASE(SortEmptyFile, "sort: empty file")
 ```
 
 Save it as `tests/nshbox/test_<something>.cpp` (an existing file if it belongs with related tests, a new one
-otherwise) - the Makefile finds it on the next `./test_nshbox.sh` run with no other change needed.
+otherwise) - the Makefile finds it on the next `./components/nshbox/test.sh` run with no other change needed.

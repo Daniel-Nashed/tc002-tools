@@ -6,7 +6,7 @@
 # a GitHub release. Run after ./build_all.sh (or with the dist/ artifact of the
 # Build workflow downloaded); release.yml calls it.
 #
-# The version is nshbox's (nshbox/src/version.h, the single source of truth, the
+# The version is nshbox's (components/nshbox/src/version.h, the single source of truth, the
 # same one push-release.sh uses); "arm32" is the target: 32-bit ARMv7-A, hard
 # float, fully static musl.
 #
@@ -28,7 +28,7 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION=$(sed -n 's/.*NSHBOX_VERSION "\(.*\)".*/\1/p' nshbox/src/version.h)
+VERSION=$(sed -n 's/.*NSHBOX_VERSION "\(.*\)".*/\1/p' components/nshbox/src/version.h)
 TARGET="arm32"
 DIST_DIR="dist"
 OUT_DIR="release"
@@ -36,7 +36,7 @@ BINARIES="dropbearmulti nshbox kilo gzip ncdu"
 CA_BUNDLE="${DIST_DIR}/ca-bundle/etc/ssl/certs/ca-certificates.crt"
 
 if [ -z "$VERSION" ]; then
-  echo "Cannot read NSHBOX_VERSION from nshbox/src/version.h" >&2
+  echo "Cannot read NSHBOX_VERSION from components/nshbox/src/version.h" >&2
   exit 1
 fi
 

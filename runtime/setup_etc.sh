@@ -81,7 +81,7 @@ done
 # and Dropbear's synthetic fallback never disagree. nobody/nogroup are
 # nginx's own compiled-in defaults for this project's pinned build,
 # confirmed directly against a real build-nginx-configure.log
-# (2026-09-12) - see nginx/README.md. Once this exists, Dropbear's own
+# (2026-09-12) - see components/nginx/README.md. Once this exists, Dropbear's own
 # getpwnam("root")/getpwuid(0) calls (__real_getpwnam/__real_getpwuid in
 # its wrapper) succeed for real, and the synthetic patch becomes a
 # dormant safety net rather than the active path - deliberately left in
@@ -164,7 +164,7 @@ do
 done
 
 # Optional overrides - not every device has these staged yet (the CA
-# bundle needs build/build_ca_bundle.sh to have run at least once) - skip quietly
+# bundle needs components/ca-bundle/build_arm.sh to have run at least once) - skip quietly
 # rather than blocking Dropbear/SSH startup over something only curl needs.
 for name in ssl/certs/ca-certificates.crt
 do
