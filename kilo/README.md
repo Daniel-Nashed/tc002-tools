@@ -28,7 +28,8 @@ device's rootfs - checks that it really is static, strips it, and writes `dist/k
 
 ## Status
 
-Built static with musl, installed by `./tc002_setup.sh` (`install/install_kilo.sh`) and working on the device. It compiles
-cleanly, with two harmless warnings from upstream's own code under modern GCC (an
-unterminated string-initializer note and an ignored `write()` return value) - not patched, since this project does not
-maintain a fork of kilo's source, matching the same minimal-touch approach used for Dropbear.
+Built static with musl, installed by `./tc002_setup.sh` (`install/install_tools.sh`, which also installs the
+`vi`/`edit` wrapper) and working on the device. It compiles cleanly, with two harmless warnings from upstream's own
+code under modern GCC (an unterminated string-initializer note and an ignored `write()` return value) - not patched,
+since this project does not maintain a fork of kilo's source, matching the same minimal-touch approach used for
+Dropbear.

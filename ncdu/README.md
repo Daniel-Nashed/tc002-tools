@@ -96,8 +96,10 @@ Lessons from getting there that still matter:
 - **The wrapper (`runtime/ncdu.sh`) cannot use `env`**: this BusyBox has no `env` applet, so `TERMINFO` is set with
   plain POSIX `VAR=value command` syntax.
 - **`adb push localdir remotedir` nests `localdir`** under `remotedir` when `remotedir` already exists, so
-  `TERMINFO=/data/share/terminfo` found nothing (`Error opening terminal: vt100`). `install/install_ncdu.sh`'s
-  `push_terminfo()` pushes each terminfo file individually with its own explicit destination path.
+  `TERMINFO=/data/share/terminfo` found nothing (`Error opening terminal: vt100`). `push_terminfo()` in
+  `install/install_etc.sh` therefore never pushes the directory: it packs the terminfo files into one tar archive,
+  pushes that, and extracts it on the device with nshbox's `tar` (pushing the files one by one turned out to be
+  unreliable too - only the last one landed).
 - **Static ncurses may need `-ltinfo`**: `libncursesw.a` does not always pull libtinfo in by itself (`undefined
   reference to 'SP'`), and there is no `libtinfow`. `ncdu/build_arm.sh` adds `-ltinfo` only when the sysroot has it.
 - The `--host` verification greps for `checking for <triple>-gcc... <triple>-gcc`, not a "checking host system type"

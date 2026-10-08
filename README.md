@@ -88,26 +88,28 @@ own deliberate, per-device decision, run separately. Persistent, not compressed-
 1. Builds every [core component](#core-components) listed above, all inside a disposable container, never on your
    host.
 2. Also builds the CA trust bundle - a plain `cp` from the build container's own OS trust store, near-instant, not
-   listed as its own component above since it's not a tool - see [ca-bundle/build_arm.sh](ca-bundle/build_arm.sh).
+   listed as its own component above since it's not a tool - see [ca-bundle/README.md](ca-bundle/README.md).
+3. Builds `tc002-discover`, the host-side tool `./tc002_setup.sh` uses to find the device on your network. It is not a
+   TC002 deliverable, so it is built natively for your machine in a separate Alpine container instead of being
+   cross-compiled - see [tc002-discover/README.md](tc002-discover/README.md). `./tc002-discover/build.sh` builds it
+   on its own.
 
 Each component also builds on its own with `./<name>/build.sh` (for example `./dropbear/build.sh`), see
-[Repository layout](#repository-layout); `./tests/verify.sh` checks the results (ARM EABI hard-float, fully static, stripped) without needing the device. See
-[docs/build_platform.md](docs/build_platform.md); what changed in the move to one static musl build, and how it works
-now, is in [docs/musl_migration.md](docs/musl_migration.md).
+[Repository layout](#repository-layout). `./tests/verify.sh` checks the results (ARM EABI hard-float, fully static,
+stripped) without needing the device. See [docs/build_platform.md](docs/build_platform.md); what changed in the move to
+one static musl build, and how it works now, is in [docs/musl_migration.md](docs/musl_migration.md).
 
 The [optional, compressed-on-demand components](#optional-compressed-on-demand-components) above do not build by
 default - each opts in with its own flag, shown in that table's "How it's built" column. Combine any subset
 (`./build_all.sh --with-curl --with-openssl`), or use `--all` to build all four in one go. `./nginx/build.sh` on its
-own does **not** build [OpenSSL](openssl/README.md) automatically - it fails fast if that has not already been run, since OpenSSL's own build takes real, non-trivial time and always does a full clean rebuild, so
-re-running it on every nginx iteration would be pure waste - see [nginx/README.md](nginx/README.md).
+own does **not** build [OpenSSL](openssl/README.md) automatically - it fails fast if that has not already been run,
+since OpenSSL's own build takes real, non-trivial time and always does a full clean rebuild, so re-running it on every
+nginx iteration would be pure waste - see [nginx/README.md](nginx/README.md).
 
-`tc002-discover` is different again - it's a host-side discovery tool, not a TC002 deliverable at all, so it will
-never be part of `./build_all.sh`'s device-build pipeline regardless. Run `./tc002-discover/build.sh` on its own - see
-[tc002-discover/README.md](tc002-discover/README.md) for why it builds natively (via a separate Alpine container)
-instead of cross-compiling for the device like everything else here.
-
-(`./nshbox/test_build_native.sh` is the one script deliberately excluded from `./build_all.sh` permanently - a local native
-dev-only test build, not a deliverable - see [nshbox/README.md](nshbox/README.md).)
+Not part of `./build_all.sh` at all, each built with its own script: [vim](vim/README.md) (optional editor, also
+pushes to the device), the test tools [jwt-verify](jwt-verify/README.md) and [whoami](whoami/README.md), and
+`./nshbox/test_build_native.sh`, a dev-only native build of nshbox for your own machine (see
+[nshbox/README.md](nshbox/README.md)).
 
 ## Repository layout
 

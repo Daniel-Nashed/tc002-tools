@@ -144,7 +144,7 @@ strings dist/dropbearmulti | grep -F '/data/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 nm dropbear.unstripped | grep -E '__wrap_getpwnam|__wrap_getpwuid'
 ```
 
-`build/test_build_artifacts.sh` runs both checks automatically; see
+`tests/test_build_artifacts.sh` (run by `./tests/verify.sh`) does both checks automatically; see
 [../tests/test_build_artifacts.sh](../tests/test_build_artifacts.sh).
 
 ## Expected successful session log
