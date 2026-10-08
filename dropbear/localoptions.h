@@ -1,5 +1,5 @@
 /* tc002-tools project-local Dropbear configuration.
- * Copied into the Dropbear source tree by build/build_dropbear.sh.
+ * Copied into the Dropbear source tree by dropbear/build_arm.sh.
  * See docs/dropbear.md for rationale. */
 
 #define DROPBEAR_SVR_PASSWORD_AUTH 0

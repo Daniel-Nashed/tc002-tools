@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs vim - persistent (INSTALL_PREFIX/bin/vim.bin + a thin wrapper),
-# OPTIONAL: only built if you explicitly run ./build_vim.sh (see its own
+# OPTIONAL: only built if you explicitly run ./vim/build.sh (see its own
 # top comment - not part of build_all.sh), and only installed if it was
 # actually built, same "skip with a log line, not an error" idiom every
 # other optional component in this project uses.
@@ -26,7 +26,7 @@ usage()
   cat <<'EOF'
 Usage: install_vim.sh [--device SERIAL] [--config FILE]
 
-Pushes dist/vim (if built - see ./build_vim.sh, optional, not part of
+Pushes dist/vim (if built - see ./vim/build.sh, optional, not part of
 build_all.sh) to INSTALL_PREFIX/bin/vim.bin, runtime/vim.sh (a thin
 TERMINFO/VIMRUNTIME-setting wrapper - see its own comments) as
 INSTALL_PREFIX/bin/vim, runtime/vicfg.sh (opens the settings file below
@@ -118,7 +118,7 @@ main()
   require_cmd adb
 
   if [ ! -f "${DIST_DIR}/vim" ]; then
-    log "skipping vim: ${DIST_DIR}/vim not built yet (run ./build_vim.sh - experimental, see its own comments)"
+    log "skipping vim: ${DIST_DIR}/vim not built yet (run ./vim/build.sh - experimental, see its own comments)"
     return
   fi
 

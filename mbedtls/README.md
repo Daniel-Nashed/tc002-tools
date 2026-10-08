@@ -8,7 +8,7 @@ cross-builds itself - the same discipline as curl, nginx, and Dropbear, just wit
 
 Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for its
 license (dual Apache-2.0 / GPL-2.0-or-later; this project takes the Apache-2.0 option). No source is vendored into
-this repository; `build/build_mbedtls.sh` downloads the pinned release tarball fresh at build time, the same way
+this repository; `mbedtls/build_arm.sh` downloads the pinned release tarball fresh at build time, the same way
 every other `build/` script here handles its upstream source.
 
 ## Why vendor and cross-build this instead of using a distribution package
@@ -36,7 +36,7 @@ virtually every other project cross-compiling mbedTLS via plain `make` today is 
 
 Unlike curl (autotools) or nginx (its own custom `configure`), mbedTLS's own build here needs no configure step at
 all - its `library/Makefile` takes `CC`/`AR` directly as ordinary `make` command-line variables, which is upstream's
-own documented way to cross-compile it. `build/build_mbedtls.sh` runs:
+own documented way to cross-compile it. `mbedtls/build_arm.sh` runs:
 
 ```sh
 make -C library CC=arm-linux-gnueabihf-gcc AR=arm-linux-gnueabihf-ar CFLAGS=-Os
@@ -61,7 +61,7 @@ and links them, unambiguously.
 ## Build
 
 ```sh
-./build_mbedtls.sh
+./mbedtls/build.sh
 ```
 
 Runs inside the build container like every other `build/` script - see
@@ -69,9 +69,9 @@ Runs inside the build container like every other `build/` script - see
 cross-compiles just `library/` with the command above, verifies the resulting archives are real
 `arm-linux-gnueabihf` objects (not accidentally built by the container's native host compiler), and installs
 `include/` and the three static archives to `build/work/mbedtls-install/` - an unversioned, stable path so
-`build/build_curl.sh` does not need to know which mbedTLS version happens to be pinned.
+`curl/build_arm.sh` does not need to know which mbedTLS version happens to be pinned.
 
-The top-level `./build_curl.sh` runs this first automatically; `./build_mbedtls.sh` also exists on its own, like
+The `./curl/build.sh` runs this first automatically; `./mbedtls/build.sh` also exists on its own, like
 every other component here, mainly so it can be built and inspected without also running the whole curl build.
 
 ## Status

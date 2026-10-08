@@ -2,7 +2,7 @@
 
 ## Compile-time configuration
 
-`dropbear/localoptions.h` (copied into the Dropbear source tree by `build/build_dropbear.sh`):
+`dropbear/localoptions.h` (copied into the Dropbear source tree by `dropbear/build_arm.sh`):
 
 ```c
 #define DROPBEAR_SVR_PASSWORD_AUTH 0
@@ -51,7 +51,7 @@ CFLAGS="-Os" \
 ```
 
 - `CC=arm-linux-gnueabihf-gcc` / `--host=arm-linux-gnueabihf` - selects the ARMHF cross-compiler and target triple.
-  `build/build_dropbear.sh` checks `configure`'s own host-detection output (`checking host system type... arm...`)
+  `dropbear/build_arm.sh` checks `configure`'s own host-detection output (`checking host system type... arm...`)
   rather than trusting the flag was silently accepted.
 - `CFLAGS="-Os"` - optimize for size, appropriate for a small embedded binary.
 - `--disable-lastlog` / `--disable-utmp` / `--disable-utmpx` / `--disable-wtmp` / `--disable-wtmpx` - each maps directly
@@ -59,13 +59,13 @@ CFLAGS="-Os" \
   `config.h` (confirmed against Dropbear's own `configure.ac`, which is derived from OpenSSH 3.6.1p2's). These turn off
   Dropbear's OS-level login-accounting logging (lastlog/utmp/wtmp records) - extra logging this project does not want
   written to the device's flash, on a target that has no working login-accounting database to write to in the first
-  place anyway. `build/build_dropbear.sh` greps `config.h` directly for all five macros after `configure` runs, rather
+  place anyway. `dropbear/build_arm.sh` greps `config.h` directly for all five macros after `configure` runs, rather
   than only trusting the command-line flags were recognized.
 
 All of the above - the exact `configure` command, `configure`'s host-type detection line, the five `DISABLE_*` macro
 lines from `config.h`, and `dbutil.c`'s actual compile command (confirming both `-DLOCALOPTIONS_H_EXISTS` and `CFLAGS`
 genuinely reached it) - are logged during every build, not just asserted; see
-[../build/build_dropbear.sh](../build/build_dropbear.sh).
+[../dropbear/build_arm.sh](../dropbear/build_arm.sh).
 
 ## The synthetic-passwd patch
 
@@ -87,7 +87,7 @@ directly, `dropbear/patches/0001-tc002-synthetic-passwd.patch` adds a single lin
 #include "flythings-passwd-fallback.c"
 ```
 
-`build/build_dropbear.sh` copies both files into the source tree before patching. Keeping the logic in its own file
+`dropbear/build_arm.sh` copies both files into the source tree before patching. Keeping the logic in its own file
 (rather than inline in the patch) means upgrading Dropbear only risks the patch's few lines of context, the code is
 reviewable on its own, and - importantly - Dropbear's Makefile source-file lists never need to be touched, since the
 include compiles as part of `dbutil.o`, which every build variant (`dropbear`, `scp`/`dbclient`, `dropbearkey`) already
@@ -126,7 +126,7 @@ authentication. Password authentication is independently compiled out, so this f
 password.
 
 The patch is verified end-to-end against a pristine download of the pinned tarball: it applies cleanly with `patch -p1
---fuzz=0`, and both a native (x86_64) build and a real ARMHF cross-build via `build/build_dropbear.sh` (in the container
+--fuzz=0`, and both a native (x86_64) build and a real ARMHF cross-build via `dropbear/build_arm.sh` (in the container
 - see [build_platform.md](build_platform.md)) compile `dbutil.o` warning-free and produce a `dropbear` binary containing
 `__wrap_getpwnam`/`__wrap_getpwuid`. The cross-built artifacts (`dropbear`, `scp`, `dropbearkey`) are confirmed ARM
 32-bit hard-float, fully static (musl - see
@@ -199,7 +199,7 @@ internally), but the bundled `libtomcrypt` sub-`make` does not inherit that same
 `sysoptions.h`. `-Wundef` flags that, but the C standard treats an undefined macro in `#if` as `0` - exactly the value
 the rest of the build already uses - so the condition still evaluates correctly.
 
-`build/build_dropbear.sh` adds `-Wno-undef` to `CFLAGS` specifically to silence this, rather than leaving it in the
+`dropbear/build_arm.sh` adds `-Wno-undef` to `CFLAGS` specifically to silence this, rather than leaving it in the
 build log or patching Dropbear's own `Makefile`/bundled `libtomcrypt` to propagate the `-D` flags into the sub-`make` -
 the latter would be a real fix, but it means patching upstream's own build orchestration for a purely cosmetic warning,
 which goes beyond the one small, reviewable synthetic-passwd patch this project otherwise limits itself to (see
@@ -208,7 +208,7 @@ the underlying condition evaluates correctly either way, this just stops it from
 
 ## Build outputs
 
-**Current build: one multi-call binary, fully static (musl).** `build/build_dropbear.sh` builds `dropbear`, `scp`,
+**Current build: one multi-call binary, fully static (musl).** `dropbear/build_arm.sh` builds `dropbear`, `scp`,
 `dropbearkey`, `dbclient` and `dropbearconvert` with Dropbear's own `MULTI=1` mode into a single `dist/dropbearmulti`
 (see `MULTI.md` in the Dropbear source; no source changes). Every program's `main()` is renamed at compile time and
 `dbmulti.c` has the only real `main()`, which runs the program named by `argv[0]` (or by its first argument:
@@ -230,7 +230,7 @@ dropbearkey    96212 bytes
 scp            22248 bytes
 ```
 
-(`dbclient` and `dropbearconvert` added to `build/build_dropbear.sh` 2026-09-12 - no verified sizes recorded yet,
+(`dbclient` and `dropbearconvert` added to `dropbear/build_arm.sh` 2026-09-12 - no verified sizes recorded yet,
 since neither has actually been built in a real container.)
 
 An unstripped binary is kept only as an optional CI/debug artifact and is never deployed to a device.

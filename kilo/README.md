@@ -6,20 +6,20 @@ over the SSH session this project provides - nothing more. Independent of Dropbe
 and it does not depend on either of them.
 
 Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for its license
-(2-clause BSD). No source is vendored into this repository; `build/build_kilo.sh` clones it fresh at build time, the
-same way `build/build_dropbear.sh` downloads Dropbear's source, rather than committing a copy here.
+(2-clause BSD). No source is vendored into this repository; `kilo/build_arm.sh` clones it fresh at build time, the
+same way `dropbear/build_arm.sh` downloads Dropbear's source, rather than committing a copy here.
 
 ## Why pinned by commit, not a release
 
 kilo has no versioned release tarballs, only a git repository. A pinned commit SHA is exactly as strong an integrity
-anchor as a checksum on a release archive - both are content-addressed - so `build/build_kilo.sh` clones the repository
+anchor as a checksum on a release archive - both are content-addressed - so `kilo/build_arm.sh` clones the repository
 and checks out a specific commit, then additionally verifies `kilo.c`'s own SHA-256 at that commit as a second,
 independent confirmation that upstream history has not been rewritten.
 
 ## Build
 
 ```sh
-./build_kilo.sh
+./kilo/build.sh
 ```
 
 Runs in the Alpine ARM32 musl container ([../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)).

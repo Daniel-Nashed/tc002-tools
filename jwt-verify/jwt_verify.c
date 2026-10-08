@@ -3,8 +3,8 @@
  * against a JWK given directly (--jwk) or against a key fetched from an
  * OIDC provider's .well-known/openid-configuration -> JWKS (--issuer),
  * matched by "kid". Deliberately ES256/ES384/ES512 (ECDSA, via mbedTLS -
- * already vendored in this project, build/build_mbedtls.sh) and EdDSA
- * (Ed25519 only, via TweetNaCl - build/build_tweetnacl.sh) - never RSA or
+ * already vendored in this project, mbedtls/build_arm.sh) and EdDSA
+ * (Ed25519 only, via TweetNaCl - tweetnacl/build_arm.sh) - never RSA or
  * HMAC. See README.md for why: mbedTLS has no Ed25519/EdDSA support at all
  * (checked directly against its source and upstream - still an open,
  * unmerged PR as of this writing), so Ed25519 verification comes from
@@ -59,7 +59,7 @@
  * ("undefined reference to `randombytes'" from a real build). Reads
  * /dev/urandom - the same CSPRNG source this project's own mbedTLS config
  * already prefers on this exact musl/Linux target (see
- * build/build_mbedtls.sh's MBEDTLS_PLATFORM_DEV_RANDOM comment) - even
+ * mbedtls/build_arm.sh's MBEDTLS_PLATFORM_DEV_RANDOM comment) - even
  * though, in practice, this is never actually called at runtime. */
 void randombytes(unsigned char *buf, unsigned long long len)
 {

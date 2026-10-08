@@ -36,7 +36,7 @@
 # that case would be pointless.
 #
 # If dist/tc002-discover has not been built yet, asks before building it
-# (../build_tc002-discover.sh - runs in a separate Alpine container, see
+# (../tc002-discover/build.sh - runs in a separate Alpine container, see
 # build/docker-alpine/README.md) rather than silently doing so or hard
 # failing.
 set -euo pipefail
@@ -167,19 +167,19 @@ ensure_discover_built()
   fi
 
   log "${DISCOVER_BIN} not built yet"
-  printf '[tc002-tools] build it now (./build_tc002-discover.sh - runs in a separate Alpine container)? [y/N] ' >&2
+  printf '[tc002-tools] build it now (./tc002-discover/build.sh - runs in a separate Alpine container)? [y/N] ' >&2
   read -r answer
 
   case "$answer" in
     y|Y|yes|Yes)
-      "${REPO_ROOT}/build_tc002-discover.sh"
+      "${REPO_ROOT}/tc002-discover/build.sh"
       ;;
     *)
-      die "tc002-discover is required for automatic discovery; build it yourself (./build_tc002-discover.sh) or set DEVICE_IP/DEVICE in ${CONFIG_FILE} directly"
+      die "tc002-discover is required for automatic discovery; build it yourself (./tc002-discover/build.sh) or set DEVICE_IP/DEVICE in ${CONFIG_FILE} directly"
       ;;
   esac
 
-  [ -x "$DISCOVER_BIN" ] || die "build_tc002-discover.sh ran but ${DISCOVER_BIN} still does not exist - inspect its output above"
+  [ -x "$DISCOVER_BIN" ] || die "tc002-discover/build.sh ran but ${DISCOVER_BIN} still does not exist - inspect its output above"
 }
 
 # Extracts one field from a flat JSON object (no nested braces - true of

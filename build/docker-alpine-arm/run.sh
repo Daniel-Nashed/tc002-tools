@@ -4,7 +4,7 @@
 # entry point for every ARM device build. The image is identified by the inputs
 # that define it (image-tag.sh: Dockerfile, ALPINE_VERSION, MCM_COMMIT): it is built
 # only if an image with the current tag is not here, so a stale image cannot be
-# used and a matching one - built earlier or fetched with ./pull_build_image.sh -
+# used and a matching one - built earlier or fetched with ./build/pull_build_image.sh -
 # is never rebuilt.
 #
 # Usage:
@@ -19,7 +19,7 @@ IMAGE="tc002-tools-build-musl"
 
 # The image is identified by the inputs that define it (see image-tag.sh): if an
 # image with this tag is already here - built earlier, or fetched with
-# ./pull_build_image.sh - it is used as it is and nothing is built.
+# ./build/pull_build_image.sh - it is used as it is and nothing is built.
 IMAGE_TAG="$("${SCRIPT_DIR}/image-tag.sh")"
 IMAGE_REF="${IMAGE}:${IMAGE_TAG}"
 
@@ -31,7 +31,13 @@ fi
 
 # Every container gets a readable, unique name (image, what it runs, this script's
 # process id), so "docker ps" shows what is running and parallel runs do not clash.
-CONTAINER_LABEL="$(printf '%s' "$(basename "${1:-shell}" .sh)" | tr -c 'A-Za-z0-9_.-' '_')"
+# Components all have a build_arm.sh / build_native.sh, so the component
+# directory is part of the label (nginx-build_arm, not just build_arm).
+CONTAINER_LABEL="$(basename "${1:-shell}" .sh)"
+case "${1:-}" in
+  */build_arm.sh|*/build_native.sh) CONTAINER_LABEL="$(basename "$(dirname "$1")")-${CONTAINER_LABEL}" ;;
+esac
+CONTAINER_LABEL="$(printf '%s' "$CONTAINER_LABEL" | tr -c 'A-Za-z0-9_.-' '_')"
 CONTAINER_NAME="${IMAGE}-${CONTAINER_LABEL}-$$"
 
 # The commit is asked on the host: inside the container git refuses the mounted

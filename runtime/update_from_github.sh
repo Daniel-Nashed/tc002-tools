@@ -2,7 +2,7 @@
 # Updates this project's core persistent tools (dropbearmulti, nshbox, kilo,
 # gzip, ncdu's binary) straight from a GitHub release. Runs ON THE TC002
 # ITSELF (BusyBox ash, not bash) - the on-device counterpart of
-# ../pull-release.sh, which does the same thing from the host over ADB/SSH.
+# ../tools/release/pull-release.sh, which does the same thing from the host over ADB/SSH.
 # Installed as /data/bin/update-from-github by install/install_tools.sh (see
 # push_update_script() there) and install/update_tools.sh.
 #
@@ -11,9 +11,9 @@
 # Uses nshbox's own "wget" (TLS + CA-bundle verification, redirect
 # following, and download+verify-in-one-pass via --sha256 <hex> - see
 # ../nshbox/README.md) against the same per-asset ".sha256" sidecar files
-# ../create_release_taz.sh already publishes for every release - no new
+# ../tools/release/create_release_taz.sh already publishes for every release - no new
 # release-pipeline work, no separately-pinned checksum manifest, same trust
-# model as pull-release.sh: this project's own releases, GitHub's own
+# model as tools/release/pull-release.sh: this project's own releases, GitHub's own
 # published checksums.
 #
 # Deliberately does NOT touch: authorized_keys, the Dropbear host key,

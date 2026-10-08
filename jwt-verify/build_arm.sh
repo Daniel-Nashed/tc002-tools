@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Builds jwt_verify, statically, against this project's own ARM32 musl
-# build of mbedTLS (build/build_mbedtls.sh - ECDSA verification) and
-# TweetNaCl (build/build_tweetnacl.sh - Ed25519 verification, compiled
+# build of mbedTLS (mbedtls/build_arm.sh - ECDSA verification) and
+# TweetNaCl (tweetnacl/build_arm.sh - Ed25519 verification, compiled
 # directly alongside jwt_verify.c since TweetNaCl is a source drop, not a
 # prebuilt library). Not part of build_all.sh/build_all_musl.sh - this is a
 # standalone test tool (see README.md), not a project deliverable.
 #
 # Usage (from the repo root):
-#   ./build_mbedtls.sh          # if not already built
-#   ./build_tweetnacl.sh        # if not already fetched
-#   ./build_jwt_verify.sh
+#   ./mbedtls/build.sh          # if not already built
+#   ./tweetnacl/build.sh        # if not already fetched
+#   ./jwt-verify/build.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,11 +19,11 @@ require_container
 require_musl_toolchain
 
 if [ ! -f "${MBEDTLS_INSTALL_DIR}/lib/libmbedtls.a" ]; then
-  die "mbedTLS is not built yet at ${MBEDTLS_INSTALL_DIR} - run ./build_mbedtls.sh (or build/docker-alpine-arm/run.sh build/build_mbedtls.sh) first"
+  die "mbedTLS is not built yet at ${MBEDTLS_INSTALL_DIR} - run ./mbedtls/build.sh (or build/docker-alpine-arm/run.sh mbedtls/build_arm.sh) first"
 fi
 
 if [ ! -f "${TWEETNACL_INSTALL_DIR}/tweetnacl.c" ]; then
-  die "TweetNaCl is not fetched yet at ${TWEETNACL_INSTALL_DIR} - run ./build_tweetnacl.sh (or build/docker-alpine-arm/run.sh build/build_tweetnacl.sh) first"
+  die "TweetNaCl is not fetched yet at ${TWEETNACL_INSTALL_DIR} - run ./tweetnacl/build.sh (or build/docker-alpine-arm/run.sh tweetnacl/build_arm.sh) first"
 fi
 
 header "jwt-verify: building (ARM32 musl, static, stripped)"

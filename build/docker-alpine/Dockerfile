@@ -23,7 +23,7 @@ ARG ALPINE_VERSION
 FROM alpine:${ALPINE_VERSION}
 
 # build-base: gcc, musl-dev (headers + static libc.a), make, binutils -
-# everything "cc -Os -static -s" needs. bash: build_tc002-discover.sh
+# everything "cc -Os -static -s" needs. bash: tc002-discover/build_native.sh
 # sources build/common.sh like every other build_*.sh here, which uses
 # bash-only syntax (set -o pipefail, local) - Alpine's default shell is
 # BusyBox ash, not bash. file: for verify_artifact()-style checks

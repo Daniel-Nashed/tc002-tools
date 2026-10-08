@@ -29,7 +29,7 @@ commented out, in the vendored `mbedtls_config.h`).
 So Ed25519 verification here comes from **[TweetNaCl](https://tweetnacl.cr.yp.to/)** instead - a tiny (809-line),
 public-domain C library written by Bernstein/Lange/Schwabe, the designers of Ed25519/Curve25519 themselves. Its
 `crypto_sign_open()` is the one function this tool actually calls. Vendored and pinned the same way every other
-third-party source in this project is (`build/build_tweetnacl.sh`, `TWEETNACL_VERSION`/`TWEETNACL_C_SHA256`/
+third-party source in this project is (`tweetnacl/build_arm.sh`, `TWEETNACL_VERSION`/`TWEETNACL_C_SHA256`/
 `TWEETNACL_H_SHA256` in `build/versions.env`) - not a directly-committed exception.
 
 **No hand-rolled elliptic-curve code anywhere in this tool.** ECDSA signature math is mbedTLS's; Ed25519 signature
@@ -45,7 +45,7 @@ calling convention, not new cryptographic code.
   code. Its HTTPS GET (used only for the `--issuer` OIDC fetch) is modeled the same way on nshbox's own `wget` - same
   mbedTLS setup, same CA bundle default.
 - **`build_arm.sh`** - builds `jwt_verify` statically against this project's own ARM32 musl mbedTLS build
-  (`build/build_mbedtls.sh`) and TweetNaCl (`build/build_tweetnacl.sh`, compiled directly alongside `jwt_verify.c` -
+  (`mbedtls/build_arm.sh`) and TweetNaCl (`tweetnacl/build_arm.sh`, compiled directly alongside `jwt_verify.c` -
   TweetNaCl is a source drop, not a prebuilt library), `-Os -ffunction-sections -fdata-sections` +
   `-Wl,--gc-sections`, stripped.
 
@@ -54,12 +54,12 @@ calling convention, not new cryptographic code.
 From the repo root:
 
 ```sh
-./build_mbedtls.sh          # if not already built
-./build_tweetnacl.sh        # if not already fetched
-./build_jwt_verify.sh
+./mbedtls/build.sh          # if not already built
+./tweetnacl/build.sh        # if not already fetched
+./jwt-verify/build.sh
 ```
 
-(`./build_jwt_verify.sh` is the same one-line `build/docker-alpine-arm/run.sh` wrapper every other component has.)
+(`./jwt-verify/build.sh` is the same one-line `build/docker-alpine-arm/run.sh` wrapper every other component has.)
 
 ## Running (on the device, or under `qemu-arm`)
 
@@ -112,20 +112,17 @@ both fetches (off by default); `--ca-bundle <path>` overrides the CA bundle used
 ## Local native test build (dev-only, NOT a deliverable)
 
 ```sh
-build/docker-alpine/run.sh build/build_tweetnacl.sh     # if not already fetched INTO THIS container -
-                                                         # NOT the root ./build_tweetnacl.sh wrapper, which
-                                                         # always fetches into the ARM container instead
-./test_build_jwt_verify_native.sh                       # just build
-./test_build_jwt_verify_native.sh --jwk key.jwk         # build, then run: dist/amd64/jwt_verify --jwk key.jwk
+./jwt-verify/test_native.sh                       # just build
+./jwt-verify/test_native.sh --jwk key.jwk         # build, then run: dist/amd64/jwt_verify --jwk key.jwk
                                                          # (token on stdin; dist/arm64/ on an ARM box)
 ```
 
-Same idea as `nshbox`'s own `./test_build_nshbox_native.sh` (see `nshbox/README.md`): builds for whatever
+Same idea as `nshbox`'s own `./nshbox/test_build_native.sh` (see `nshbox/README.md`): builds for whatever
 architecture the container itself runs on (amd64 on a PC, say), in the native Alpine container
 (`build/docker-alpine`), **not** the ARM cross toolchain - quick local testing without `qemu-arm` or a device. mbedTLS
 comes from Alpine's own `mbedtls-dev`/`mbedtls-static` packages (already installed there for `nshbox`'s own native
-build) rather than this project's ARM-only `build/build_mbedtls.sh`; TweetNaCl is the same fetched copy either way
-(plain portable C, no cross-compiler dependency of its own - see `build/build_tweetnacl.sh`'s own comments). Output
+build) rather than this project's ARM-only `mbedtls/build_arm.sh`; TweetNaCl is the same fetched copy either way
+(plain portable C, no cross-compiler dependency of its own - see `tweetnacl/build_arm.sh`'s own comments). Output
 goes to `dist/<platform>/jwt_verify`, never `jwt-verify/jwt_verify` itself (the ARM build's own output path) - the
 two can never be confused or accidentally pushed anywhere.
 

@@ -13,7 +13,7 @@ ncdu has two actively maintained branches:
 - **1.x** ("LTS") - the original C implementation, using `ncurses`.
 - **2.x** - a rewrite in [Zig](https://ziglang.org/), with no `ncurses` dependency.
 
-This project vendors **1.x** (the exact version is set in [../build/build_ncdu.sh](../build/build_ncdu.sh)). Every other
+This project vendors **1.x** (the exact version is set in [../ncdu/build_arm.sh](../ncdu/build_arm.sh)). Every other
 component here (Dropbear, `nshbox`, `kilo`) cross-compiles through the same single `gcc` toolchain (static musl);
 pulling in 2.x would mean standing up an entirely separate Zig cross-compiler toolchain just for this one tool, a
 much bigger addition to the build platform than anything else in this project. `ncurses` linking has its own
@@ -23,7 +23,7 @@ whole way through.
 ## Statically linked ncurses
 
 Unlike Dropbear/`nshbox`/`kilo` (all libc-only, or libc+`libcrypto` for `nshbox`'s checksum commands), `ncdu` needs
-`ncursesw` (wide-character `ncurses`, for UTF-8 support) to build at all. `build/build_ncdu.sh` links it
+`ncursesw` (wide-character `ncurses`, for UTF-8 support) to build at all. `ncdu/build_arm.sh` links it
 **statically** - deliberately learning from the exact problem this project already hit with `nshbox` and
 `libcrypto`: a dynamically-linked binary needs the *device's* runtime library to match closely enough, and that
 already turned out not to be a safe assumption once (`nshbox` briefly required `OPENSSL_1_1_1`, which the TC002's
@@ -32,8 +32,8 @@ class of failure with `ncurses`/`tinfo`, `ncdu` carries its own copy of the libr
 of a larger binary - a reasonable tradeoff for a single interactive tool that is not part of every SSH session the
 way `nshbox`'s commands are.
 
-`build/build_ncdu.sh` verifies this directly (`readelf -d` must show no `ncurses`/`tinfo` entry) rather than
-trusting the linker flags were applied correctly - the same discipline `build/build_nshbox.sh` already applies to
+`ncdu/build_arm.sh` verifies this directly (`readelf -d` must show no `ncurses`/`tinfo` entry) rather than
+trusting the linker flags were applied correctly - the same discipline `nshbox/build_arm.sh` already applies to
 its own libcrypto link.
 
 Static linking only carries the `ncursesw`/`tinfo` library *code* into the binary - it does not embed the terminal
@@ -44,14 +44,14 @@ project ships that data too, via a wrapper script rather than requiring a manual
 ## Build
 
 ```sh
-./build_ncdu.sh
+./ncdu/build.sh
 ```
 
 **Now built with the static musl toolchain** (Alpine ARM32 container, [../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)),
 the result is fully static (`readelf -d` shows no NEEDED entry
 at all, and `verify_static_binary` checks that). The static ncurses comes from that image's ARM sysroot
 (`/opt/sysroot`, Alpine's own armv7 `ncurses-dev`/`ncurses-static`/`ncurses-terminfo` packages unpacked with `apk
---arch armv7 --root`), not from a package for the build host or a from-source build. `build_ncdu.sh` points the
+--arch armv7 --root`), not from a package for the build host or a from-source build. `ncdu/build.sh` points the
 compiler, linker and pkg-config there, and adds `-ltinfo` only if the sysroot actually has `libtinfo.a`. Those
 packages follow the image's Alpine release repository rather than being pinned to exact versions. The terminfo entries are
 copied from that sysroot too.
@@ -88,7 +88,7 @@ Lessons from getting there that still matter:
 - **The TC002 has no terminfo database**, so the statically linked ncursesw failed at startup with `Error opening
   terminal: xterm-256color`. Two options were considered: rebuild ncurses from source with `--with-fallbacks` to
   compile terminal descriptions into the library (zero on-device files, but a whole new vendored build stage), or ship
-  a handful of terminfo files. This project ships the files: `package_terminfo()` in `build/build_ncdu.sh` collects
+  a handful of terminfo files. This project ships the files: `package_terminfo()` in `ncdu/build_arm.sh` collects
   them from the sysroot's ncurses packages, searching **per entry** across `/lib/terminfo`, `/etc/terminfo` and
   `/usr/share/terminfo` (the plain entries and the variant names can live in different roots, so locking onto the first
   root that exists silently misses some). See
@@ -99,7 +99,7 @@ Lessons from getting there that still matter:
   `TERMINFO=/data/share/terminfo` found nothing (`Error opening terminal: vt100`). `install/install_ncdu.sh`'s
   `push_terminfo()` pushes each terminfo file individually with its own explicit destination path.
 - **Static ncurses may need `-ltinfo`**: `libncursesw.a` does not always pull libtinfo in by itself (`undefined
-  reference to 'SP'`), and there is no `libtinfow`. `build/build_ncdu.sh` adds `-ltinfo` only when the sysroot has it.
+  reference to 'SP'`), and there is no `libtinfow`. `ncdu/build_arm.sh` adds `-ltinfo` only when the sysroot has it.
 - The `--host` verification greps for `checking for <triple>-gcc... <triple>-gcc`, not a "checking host system type"
   banner: ncdu's `configure.ac` never calls `AC_CANONICAL_HOST`, so that banner never appears.
 - Terminfo is deployed via `nshbox tar` piped over `ssh` (see [../nshbox/README.md](../nshbox/README.md#tar)), not

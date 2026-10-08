@@ -10,7 +10,7 @@ deployed to the device. It's a host-side utility you run on your own machine. Se
 build platform from everything else here.
 
 First-party code, not vendored - `tc002-discover/src/tc002-discover.c` lives directly in this repository, the same
-way [nshbox](../nshbox/README.md)'s source does. No download/checksum step; `build/build_tc002-discover.sh` just
+way [nshbox](../nshbox/README.md)'s source does. No download/checksum step; `tc002-discover/build_native.sh` just
 compiles the one source file.
 
 ## How discovery works
@@ -87,7 +87,7 @@ being remembered, not something `tc002-discover` (a general-purpose, standalone 
 
 ## Static, against musl
 
-`build/build_tc002-discover.sh` builds with exactly the command documented in `tc002-discover.c`'s own header
+`tc002-discover/build_native.sh` builds with exactly the command documented in `tc002-discover.c`'s own header
 comment: `cc -Os -static -s -o tc002-discover tc002-discover.c`, inside the Alpine container (see
 [../build/docker-alpine/Dockerfile](../build/docker-alpine/Dockerfile)). Static linking here is the same
 risk-avoidance reasoning already used throughout this project (see [../openssl/README.md](../openssl/README.md)),
@@ -106,7 +106,7 @@ also why the build produces a genuinely dependency-free binary rather than merel
 ## Build
 
 ```sh
-./build_tc002-discover.sh
+./tc002-discover/build.sh
 ```
 
 Runs inside the Alpine container - see [../build/docker-alpine/README.md](../build/docker-alpine/README.md).

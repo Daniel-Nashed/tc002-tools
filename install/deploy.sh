@@ -60,7 +60,7 @@ command finishes). Anything not built yet is skipped with a log line, not
 an error - deploy.sh always installs everything that IS built, no flag
 needed to opt in.
 
-vim (optional, see build_vim.sh) is deliberately NOT part of this -
+vim (optional, see vim/build_arm.sh) is deliberately NOT part of this -
 not everyone wants to spend the flash space on an editor beyond kilo.
 Even once built, it is never pushed by deploy.sh; run
 install/install_vim.sh yourself as its own, separate, deliberate step -

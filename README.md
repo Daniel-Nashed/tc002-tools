@@ -8,14 +8,14 @@ This is an **unofficial**, community project. It is not affiliated with, endorse
 ## Quick start
 
 ```sh
-./pull_build_image.sh             # 1. fetch the ready-made build image (skips ~25 minutes compiling the compiler)
+./build/pull_build_image.sh       # 1. fetch the ready-made build image (skips ~25 minutes compiling the compiler)
 ./build_all.sh                    # 2. build the core tools (in a disposable container, never on your host)
 ./tc002_setup.sh                  # 3. find your device over ADB and deploy everything to it
 ssh root@<device-ip>              # 4. connect - public-key auth, no password
 ```
 
 Step 1 is optional and explicit: without it, `./build_all.sh` builds the image itself on the first run (or build it
-alone with `./build_image.sh`). Only an `amd64` image is published so far; on an `arm64` machine skip step 1. Details:
+alone with `./build/build_image.sh`). Only an `amd64` image is published so far; on an `arm64` machine skip step 1. Details:
 [docs/build_platform.md](docs/build_platform.md#getting-the-image-pull-it-or-build-it). To skip the build entirely, `./tc002_setup.sh
 --release` deploys a published release instead - see [docs/releasing.md](docs/releasing.md).
 
@@ -77,7 +77,7 @@ own deliberate, per-device decision, run separately. Persistent, not compressed-
 
 | Component | What it provides                                                                                                                                                                                                                                                                                  | How it's built and deployed                                        |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| **vim**   | Real, modal vi/vim editing (`--with-features=tiny`, ~1.4 MB fully static). Overwrites `vi`/`edit` to point at it instead of kilo once deployed; `vicfg` opens its settings file directly, never overwritten once it exists - see [docs/device_layout.md](docs/device_layout.md#vim). | `./build_vim.sh` (builds AND pushes it - see its own comments)     |
+| **vim**   | Real, modal vi/vim editing (`--with-features=tiny`, ~1.4 MB fully static). Overwrites `vi`/`edit` to point at it instead of kilo once deployed; `vicfg` opens its settings file directly, never overwritten once it exists - see [docs/device_layout.md](docs/device_layout.md#vim). | `./vim/build.sh` (builds AND pushes it - see its own comments)     |
 
 ## Building
 
@@ -88,39 +88,66 @@ own deliberate, per-device decision, run separately. Persistent, not compressed-
 1. Builds every [core component](#core-components) listed above, all inside a disposable container, never on your
    host.
 2. Also builds the CA trust bundle - a plain `cp` from the build container's own OS trust store, near-instant, not
-   listed as its own component above since it's not a tool - see [build/build_ca_bundle.sh](build/build_ca_bundle.sh).
+   listed as its own component above since it's not a tool - see [ca-bundle/build_arm.sh](ca-bundle/build_arm.sh).
 
-Each component also has its own standalone script (`./build_all.sh build/build_dropbear.sh`, etc.); `./verify.sh`
-checks the results (ARM EABI hard-float, fully static, stripped) without needing the device. See
+Each component also builds on its own with `./<name>/build.sh` (for example `./dropbear/build.sh`), see
+[Repository layout](#repository-layout); `./tests/verify.sh` checks the results (ARM EABI hard-float, fully static, stripped) without needing the device. See
 [docs/build_platform.md](docs/build_platform.md); what changed in the move to one static musl build, and how it works
 now, is in [docs/musl_migration.md](docs/musl_migration.md).
 
 The [optional, compressed-on-demand components](#optional-compressed-on-demand-components) above do not build by
 default - each opts in with its own flag, shown in that table's "How it's built" column. Combine any subset
-(`./build_all.sh --with-curl --with-openssl`), or use `--all` to build all four in one go. `./build_all.sh
-build/build_nginx.sh` does **not** build [OpenSSL](openssl/README.md) automatically - it fails fast if that has not
-already been run, since OpenSSL's own build takes real, non-trivial time and always does a full clean rebuild, so
+(`./build_all.sh --with-curl --with-openssl`), or use `--all` to build all four in one go. `./nginx/build.sh` on its
+own does **not** build [OpenSSL](openssl/README.md) automatically - it fails fast if that has not already been run, since OpenSSL's own build takes real, non-trivial time and always does a full clean rebuild, so
 re-running it on every nginx iteration would be pure waste - see [nginx/README.md](nginx/README.md).
 
 `tc002-discover` is different again - it's a host-side discovery tool, not a TC002 deliverable at all, so it will
-never be part of `./build_all.sh`'s device-build pipeline regardless. Run `./build_tc002-discover.sh` on its own - see
+never be part of `./build_all.sh`'s device-build pipeline regardless. Run `./tc002-discover/build.sh` on its own - see
 [tc002-discover/README.md](tc002-discover/README.md) for why it builds natively (via a separate Alpine container)
 instead of cross-compiling for the device like everything else here.
 
-(`./test_build_nshbox_native.sh` is the one script deliberately excluded from `./build_all.sh` permanently - a local native
+(`./nshbox/test_build_native.sh` is the one script deliberately excluded from `./build_all.sh` permanently - a local native
 dev-only test build, not a deliverable - see [nshbox/README.md](nshbox/README.md).)
+
+## Repository layout
+
+```text
+tc002-tools/
+├── build_all.sh        build the core components (THE build command)
+├── tc002_setup.sh      deploy to a device over ADB (tc002_start.sh restarts SSH, tc002_update.sh pushes updates)
+├── <component>/        one directory per component, with its README, build scripts and any sources or patches
+│                         core:             dropbear  nshbox  kilo  gzip  ncdu  ca-bundle
+│                         optional:         curl  nginx  openssl  7zip  vim
+│                         build-time only:  mbedtls  tweetnacl
+│                         test tools:       jwt-verify  whoami
+│                         host tool:        tc002-discover
+├── build/              shared build support: common.sh, versions.env, Docker contexts, build-image scripts
+├── install/            host-side deployment over ADB and SSH
+├── runtime/            scripts that run on the device (BusyBox ash)
+├── tools/release/      push-release.sh, create_release_taz.sh, pull-release.sh
+├── tests/              verify.sh, the nshbox functional tests, the on-device nginx test
+├── docs/               documentation
+└── config/             device configuration (tc002-tools.conf is gitignored)
+```
+
+Every component uses the same script names:
+
+- `build.sh` - the command you run: it starts the build container and runs `build_arm.sh` in it
+- `build_arm.sh` - the real build, inside the ARM musl container (not run directly on the host)
+- `build_native.sh` - the build inside the native Alpine container, for `tc002-discover` and the dev-only native builds
+  of `nshbox` and `jwt-verify`
 
 ## Testing
 
 ```sh
-./test_nshbox.sh
+./nshbox/test.sh
 ```
 
 Builds nshbox natively and runs its functional test suite against it ([tests/nshbox/](tests/nshbox/README.md)) - a
 small C++ harness that diffs nshbox's own commands (`grep`, `sort`, `wc`, `head`/`tail`, `dirname` so far) against
 real GNU coreutils/grep, in its own disposable Ubuntu container (see
 [build/docker-ubuntu/README.md](build/docker-ubuntu/README.md) for why a separate container from the ARM cross-build
-one). Tests logic correctness on the host, not device-specific behavior - `verify.sh` and on-device testing still
+one). Tests logic correctness on the host, not device-specific behavior - `tests/verify.sh` and on-device testing still
 cover that side, see [docs/architecture.md](docs/architecture.md).
 
 ```sh

@@ -1,6 +1,6 @@
 # Builds the core deliverables - dropbearmulti, nshbox, kilo, gzip, ncdu (with
 # its terminfo) and the CA bundle - in the prebuilt ARM image, then runs
-# verify.sh on them. The on-demand tools (curl, nginx, 7-Zip, the OpenSSL CLI)
+# tests/verify.sh on them. The on-demand tools (curl, nginx, 7-Zip, the OpenSSL CLI)
 # are not part of this workflow yet.
 #
 # The image comes from image.yml (built once per set of inputs, then only
@@ -63,13 +63,13 @@ jobs:
       # The same script contributors use: pulls the published image and tags it, so
       # the build below finds it and does not build it
       - name: Pull the build image
-        run: ./pull_build_image.sh
+        run: ./build/pull_build_image.sh
 
       - name: Build the core deliverables
         run: ./build_all.sh
 
       - name: Verify the artifacts
-        run: ./verify.sh
+        run: ./tests/verify.sh
 
       - name: Upload dist/
         uses: actions/upload-artifact@v7

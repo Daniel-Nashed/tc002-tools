@@ -5,7 +5,7 @@ its own `openssl` CLI as a genuinely useful diagnostic tool in its own right (ch
 endpoint by hand, generating keys - the same reasoning that justifies vendoring [curl](../curl/README.md)). curl
 uses [mbedTLS](../mbedtls/README.md) instead of this - nothing else here links against this build.
 
-`build/build_openssl.sh` delivers three things from one build, split across two output trees (see "Two output
+`openssl/build_arm.sh` delivers three things from one build, split across two output trees (see "Two output
 trees" below):
 
 1. **Static archives** - `libssl.a`/`libcrypto.a`, for nginx to link against, and for any future C/C++ code in this
@@ -15,7 +15,7 @@ trees" below):
    project's own crypto code at all.
 
 Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for its
-license (Apache License 2.0). No source is vendored into this repository; `build/build_openssl.sh` downloads the
+license (Apache License 2.0). No source is vendored into this repository; `openssl/build_arm.sh` downloads the
 pinned release tarball fresh at build time, the same way every other `build/` script here handles its upstream
 source.
 
@@ -109,7 +109,7 @@ OpenSSL's own `Configure` *independently* auto-detects this platform's atomic-li
 unwrapped `-latomic` into its own `CNF_EX_LIBS` variable (confirmed directly in the real generated Makefile,
 2026-09-12: `CNF_EX_LIBS=-ldl -pthread -latomic`) - which every binary link line appends via
 `BIN_EX_LIBS = $(CNF_EX_LIBS) $(EX_LIBS)`, *after* `LDFLAGS`. Wrapping only the `LDFLAGS` copy does nothing for the
-`CNF_EX_LIBS` one. The fix that actually works: `build/build_openssl.sh` captures `CNF_EX_LIBS`'s real,
+`CNF_EX_LIBS` one. The fix that actually works: `openssl/build_arm.sh` captures `CNF_EX_LIBS`'s real,
 auto-detected value from the generated Makefile, patches just its `-latomic` token, and passes the result back via
 a `make CNF_EX_LIBS=...` command-line override - the same "override the real Makefile variable, verified, not
 guessed" technique already proven for curl.
@@ -118,7 +118,7 @@ guessed" technique already proven for curl.
 
 Now that everything is static, what a *build* needs (headers, `.a` archives) and what the *device* needs (nothing
 but a self-contained binary and a config directory) are genuinely different sets of files - so
-`build/build_openssl.sh` produces two separate trees under `dist/openssl/` instead of one combined one:
+`openssl/build_arm.sh` produces two separate trees under `dist/openssl/` instead of one combined one:
 
 - **`sdk/`** - `include/openssl/*.h`, `lib/{libssl.a,libcrypto.a}` (plus `pkgconfig/`, `cmake/`, `ossl-modules/`),
   and `bin/openssl` - flattened, no `data/` prefix, shaped like an ordinary "-dev" package rather than a slice of
@@ -126,7 +126,7 @@ but a self-contained binary and a config directory) are genuinely different sets
   baked in for the *device* tree's benefit - see below), which is meaningless for something meant to be mounted
   into some other, unrelated build container later - confirmed by an actual build (2026-09-12) that without
   deliberately flattening it, that prefix otherwise leaks straight through as `sdk/data/lib/...` instead of the
-  `sdk/lib/...` any consumer would actually expect. This is what `build_nginx.sh` points its own
+  `sdk/lib/...` any consumer would actually expect. This is what `nginx/build.sh` points its own
   `--with-cc-opt`/`--with-ld-opt` at to link against.
 - **`device/`** - just `data/bin/openssl` (the same CLI tool, copied out) and the `etc/ssl/{certs,private,misc,...}`
   tree (created but left empty by `install_ssldirs` - OpenSSL ships no root CA data of its own) - the only things
@@ -134,7 +134,7 @@ but a self-contained binary and a config directory) are genuinely different sets
   is meant to mirror the real device paths directly (`device/data/bin/openssl` -> `/data/bin/openssl` on the
   device), so the nesting is meaningful, not noise. The root CA bundle `curl` also needs (via `CURL_CA_BUNDLE`) is
   **not** produced here any more - it is its own build step,
-  [`../build/build_ca_bundle.sh`](../build/build_ca_bundle.sh), independent of this script (see
+  [`../ca-bundle/build_arm.sh`](../ca-bundle/build_arm.sh), independent of this script (see
   [../docs/device_layout.md](../docs/device_layout.md#trusted-root-ca-bundle) for why: producing it has zero
   dependency on actually compiling OpenSSL, so tying it to this much slower, genuinely optional build meant
   declining the OpenSSL CLI silently broke curl's HTTPS too). No `lib/` at
@@ -193,8 +193,8 @@ no NEEDED entries (`file`/`readelf` confirmed), and `make DESTDIR=... install_sw
 
 ## Deployment
 
-The CA bundle is deployed independently of this build entirely: `build/build_ca_bundle.sh` packages it (its own build
-step, not part of `build_openssl.sh` - see above), and `install/install_etc.sh`'s `push_ca_bundle()` stages
+The CA bundle is deployed independently of this build entirely: `ca-bundle/build_arm.sh` packages it (its own build
+step, not part of `openssl/build.sh` - see above), and `install/install_etc.sh`'s `push_ca_bundle()` stages
 `ca-certificates.crt` at `/data/etc-overrides/ssl/certs/ca-certificates.crt` unconditionally - see
 [../docs/device_layout.md](../docs/device_layout.md#trusted-root-ca-bundle).
 
@@ -212,7 +212,7 @@ The first musl nginx and CLI were 3.44 MB / 3.95 MB - the same as the old dynami
 ## Build
 
 ```sh
-./build_openssl.sh
+./openssl/build.sh
 ```
 
 Runs inside the build container like every other `build/` script - see
@@ -222,8 +222,8 @@ that the `openssl` CLI has no dynamic dependency on libssl/libcrypto/libatomic a
 `dist/openssl/sdk/` and `dist/openssl/device/` (see "Two output trees" above) plus
 `dist/openssl/manifest-openssl.json`.
 
-This pipeline never builds OpenSSL automatically as part of building nginx - `./build_nginx.sh` fails fast instead
-if this has not been run first, see [nginx/README.md](../nginx/README.md). `./build_openssl.sh` exists on its own,
+This pipeline never builds OpenSSL automatically as part of building nginx - `./nginx/build.sh` fails fast instead
+if this has not been run first, see [nginx/README.md](../nginx/README.md). `./openssl/build.sh` exists on its own,
 like every other component here, mainly so it can be built and inspected without also running the whole nginx
 build.
 

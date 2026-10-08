@@ -13,7 +13,7 @@ starts automatically every time - `./tc002_start.sh` is then only needed if Drop
   USB with `adb devices` listing it. This, and everything below, runs on your host - not in the build container (see
   the next point).
 - You have built Dropbear - one multi-call binary, `dist/dropbearmulti`, that is `dropbear`, `scp`, `dropbearkey`,
-  `dbclient` and `dropbearconvert` in one file: `./build_dropbear.sh` (or plain `./build_all.sh` for everything) - see [build_platform.md](build_platform.md) and
+  `dbclient` and `dropbearconvert` in one file: `./dropbear/build.sh` (or plain `./build_all.sh` for everything) - see [build_platform.md](build_platform.md) and
   [dropbear.md](dropbear.md).
 - You have an SSH public key file you intend to authorize (not the private key) - or let
   `resolve_authorized_key()` fall back to `$HOME/.ssh/id_ed25519.pub` (asking first), or generate one, if you don't
@@ -54,7 +54,7 @@ install/discover_device.sh
 ```
 
 Runs `dist/tc002-discover --all` (see [../tc002-discover/README.md](../tc002-discover/README.md)) - asking first to
-build it via `./build_tc002-discover.sh` if it isn't there yet - to find the TC002(s) on the local network, then
+build it via `./tc002-discover/build.sh` if it isn't there yet - to find the TC002(s) on the local network, then
 writes the one found's IP and hostname into `DEVICE_IP=`/`DEVICE_HOSTNAME=` in `config/tc002-tools.conf` (created
 from the `.example` file if it doesn't exist yet; `DEVICE_HOSTNAME` is informational only - nothing reads it back).
 Does nothing if `DEVICE` is already set in the config - an explicit ADB serial always wins over `DEVICE_IP` anyway.
@@ -78,7 +78,7 @@ Creates `/data/bin` and `/data/home/.ssh`, sets their ownership/permissions, and
 ## 2. Install nshbox, kilo, gzip
 
 ```sh
-./build_all.sh build/build_nshbox.sh
+./build_all.sh nshbox/build_arm.sh
 install/install_tools.sh
 ```
 
@@ -96,8 +96,8 @@ install/install_etc.sh
 ```
 
 Pushes `setup_etc.sh` (the on-device bootstrap/mount script, see step 6) to `/data/bin/setup_etc.sh`,
-`runtime/etc/{passwd,group,resolv.conf}` plus the CA trust bundle (if `build_openssl.sh` has been run) to
-`/data/etc-overrides/` as staged defaults, and `ncdu`'s binary/wrapper/terminfo data (if `build_ncdu.sh` has been
+`runtime/etc/{passwd,group,resolv.conf}` plus the CA trust bundle (if `openssl/build.sh` has been run) to
+`/data/etc-overrides/` as staged defaults, and `ncdu`'s binary/wrapper/terminfo data (if `ncdu/build.sh` has been
 run) - always overwriting whatever was staged there before - see
 [device_layout.md](device_layout.md#etcpasswd-etcgroup-etcresolvconf). Terminfo is bundled into a single tar
 archive, pushed as one file, and extracted on-device via `/data/bin/tar` (nshbox's own `tar` applet, invoked by its

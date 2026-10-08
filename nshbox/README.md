@@ -4,7 +4,7 @@ A tiny, single-binary Linux toolbox for the TC002. Commands are dispatched eithe
 BusyBox-style, by the program being invoked through a symlink named after the command (e.g. a symlink
 `netstat -> nshbox` run as `netstat -l`) - see "Installing symlinks" below for how those symlinks get created.
 
-Build path is independent of Dropbear's; see `build/build_nshbox.sh`, run via `./build_all.sh` like every other `build/`
+Build path is independent of Dropbear's; see `nshbox/build_arm.sh`, run via `./build_all.sh` like every other component
 script (see [../docs/build_platform.md](../docs/build_platform.md) - never run it directly). Not a dependency of
 Dropbear, and Dropbear is not a dependency of it.
 
@@ -1039,7 +1039,7 @@ working equivalents (e.g. via BusyBox) and you want to keep using those instead,
 ## Build
 
 ```sh
-./build_nshbox.sh        # -> dist/nshbox
+./nshbox/build.sh        # -> dist/nshbox
 ```
 
 Runs in the Alpine ARM32 musl container ([../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md);
@@ -1057,7 +1057,7 @@ MBEDTLS_DIR=<prefix> STATIC=1` from inside that container. Its options:
 
 - `STATIC=1` links everything statically (the build script always sets it).
 - `MBEDTLS_DIR=<prefix with include/ and lib/>` is where the checksum commands' mbedTLS comes from - the
-  `libmbedcrypto.a` that [../build/build_mbedtls.sh](../build/build_mbedtls.sh) builds. Left empty, the system's
+  `libmbedcrypto.a` that [../mbedtls/build_arm.sh](../mbedtls/build_arm.sh) builds. Left empty, the system's
   `libmbedtls-dev` is used, which is what the Ubuntu test container has (a plain dynamic glibc build for the
   functional test suite, `make CROSS=`). `nshbox.c` works with mbedTLS 3.x and 2.x.
 - `CHECKSUMS=0` (`-DNSHBOX_NO_CHECKSUMS`) leaves out `sha256sum`, `sha1sum`, `sha384sum`, `sha512sum`, `md5sum`,
@@ -1073,11 +1073,11 @@ is fine.
 ## Local native test build (dev-only, NOT a deliverable)
 
 ```sh
-./test_build_nshbox_native.sh              # just build
-./test_build_nshbox_native.sh top -l 5     # build, then run: dist/amd64/nshbox top -l 5 (dist/arm64/ on an ARM box)
+./nshbox/test_build_native.sh              # just build
+./nshbox/test_build_native.sh top -l 5     # build, then run: dist/amd64/nshbox top -l 5 (dist/arm64/ on an ARM box)
 ```
 
-(the root wrapper builds in the container, then runs the binary on the host, never inside the container, since the
+(the wrapper builds in the container, then runs the binary on the host, never inside the container, since the
 whole point is testing against the host's own environment)
 
 Builds `nshbox` for the architecture the container runs on, in the native Alpine container (`build/docker-alpine`),
@@ -1099,7 +1099,7 @@ build host's own numbers, not the device's.
 Deliberately kept separate from everything else in this project otherwise: not called from `build/build_all_musl.sh`
 (so it is never part of a plain `./build_all.sh`), no manifest, no artifact validation - it is scratch tooling for the
 person working on `nshbox`, not part of the pipeline that produces what actually ships to the device. The root
-`./test_build_nshbox_native.sh` wrapper exists purely for convenience alongside the other root `./build-*.sh` scripts; unlike
+`./nshbox/test_build_native.sh` wrapper exists purely for convenience alongside the other per-component `build.sh` wrappers; unlike
 those, running it still only ever touches `dist/<platform>/`, never `dist/nshbox`.
 
 ## Why the checksums use mbedTLS, not OpenSSL
@@ -1131,10 +1131,10 @@ command - `info`, `ps`, `netstat`, all of it - not just the SHA3 four. The SHA3 
 `sha512_*` functions (SHA-384 is the SHA-512 code with a flag), linked statically from `libmbedcrypto.a`. The
 low-level API is used on purpose rather than the generic `mbedtls_md` interface, which would pull in every enabled
 digest. Nothing crypto-related is loaded from the device any more, so this whole class of problem is gone. It is the
-same pinned mbedTLS build curl uses ([../build/build_mbedtls.sh](../build/build_mbedtls.sh)), Apache-2.0 licensed
+same pinned mbedTLS build curl uses ([../mbedtls/build_arm.sh](../mbedtls/build_arm.sh)), Apache-2.0 licensed
 (see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)).
 
-`build/build_nshbox.sh` checks that no `libcrypto`/`libssl`/`libmbed*` entry is in the binary's dynamic section
+`nshbox/build_arm.sh` checks that no `libcrypto`/`libssl`/`libmbed*` entry is in the binary's dynamic section
 (`readelf -d`). It used to check instead that no OpenSSL symbol version newer than `OPENSSL_1_1_0` was required
 (`readelf -V`); that check is gone with the dependency.
 
@@ -1146,9 +1146,9 @@ Phase 13):
 - `nshbox --version` (or `-v`) prints just the version number and exits, useful for confirming which build is
   actually installed/running on a device rather than assuming a redeploy took effect. `nshbox --help` is still
   **not implemented** - only bare `nshbox` (no args) prints full usage (which also includes the version).
-- Cross-builds via `./build_nshbox.sh` (Alpine musl container) as a fully static ARM 32-bit hard-float executable
+- Cross-builds via `./nshbox/build.sh` (Alpine musl container) as a fully static ARM 32-bit hard-float executable
   (`ELF 32-bit LSB executable, ARM, EABI5 ... statically linked`), matching the verified target ABI (see
-  [../docs/platform.md](../docs/platform.md)), and stripped; `./verify.sh` checks this. It was earlier a dynamic glibc
+  [../docs/platform.md](../docs/platform.md)), and stripped; `./tests/verify.sh` checks this. It was earlier a dynamic glibc
   build. Confirmed running on the device (2026-09-25) for `nslookup`, `dig -x`, `hostname` and the DNS lookups; the
   other commands have not been re-checked on the device since the switch to musl.
 - The checksum commands were confirmed on the actual TC002 while they used OpenSSL - see "Why the checksums use

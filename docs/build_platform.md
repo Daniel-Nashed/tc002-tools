@@ -25,9 +25,9 @@ There are two explicit ways, and you never have to choose one: if the image is m
 
 | To                                                     | Run                        | Notes                                                                             |
 | ------------------------------------------------------ | -------------------------- | --------------------------------------------------------------------------------- |
-| Use the published, ready-made image (the admin's path) | `./pull_build_image.sh`    | Pulls the image GitHub Actions built for the same tag. Fast; `amd64` only so far. |
-| Build the image yourself (the developer's path)        | `./build_image.sh`         | About 25 minutes for the compiler the first time; a repeat is instant.            |
-| Build it again for unchanged inputs                    | `./build_image.sh --force` | For example to check that a local build behaves like the published one.           |
+| Use the published, ready-made image (the admin's path) | `./build/pull_build_image.sh`    | Pulls the image GitHub Actions built for the same tag. Fast; `amd64` only so far. |
+| Build the image yourself (the developer's path)        | `./build/build_image.sh`         | About 25 minutes for the compiler the first time; a repeat is instant.            |
+| Build it again for unchanged inputs                    | `./build/build_image.sh --force` | For example to check that a local build behaves like the published one.           |
 | Just build, and let the image build itself if missing  | `./build_all.sh`           | Uses a matching image, pulled or built earlier; builds one if there is none.      |
 
 - **The pull** works out your platform, requests that platform from the registry and tags the result like a local build
@@ -110,14 +110,14 @@ nginx needing OpenSSL, are handled automatically). **`--rebuild` on its own does
 even if they were already built** - those stay opt-in per run just like without `--rebuild`; combine `--rebuild --all`
 (or `--rebuild` with the specific `--with-X` flags) to force a full rebuild of everything.
 
-`./build_nshbox.sh`, `./build_kilo.sh`, `./build_gzip.sh`, `./build_ncdu.sh`, `./build_dropbear.sh`,
-`./build_ca_bundle.sh`, `./build_mbedtls.sh`, `./build_curl.sh`, `./build_nginx.sh`, `./build_openssl.sh`, or
-`./build_7zip.sh` each build just one component directly (`./build_all.sh build/build_dropbear.sh`, etc. is the
-equivalent long form). `./build_tc002-discover.sh` is the one exception - it builds in a separate, native Alpine
+`./nshbox/build.sh`, `./kilo/build.sh`, `./gzip/build.sh`, `./ncdu/build.sh`, `./dropbear/build.sh`,
+`./ca-bundle/build.sh`, `./mbedtls/build.sh`, `./curl/build.sh`, `./nginx/build.sh`, `./openssl/build.sh`, or
+`./7zip/build.sh` each build just one component directly (`./build_all.sh dropbear/build_arm.sh`, etc. is the
+equivalent long form). `./tc002-discover/build.sh` is the one exception - it builds in a separate, native Alpine
 container (see [build/docker-alpine/README.md](../build/docker-alpine/README.md)), because it is a host-side tool, not
-an ARM one. Do not run anything under `build/` directly (`cd build && ./build_all.sh`, `./build/build_dropbear.sh`,
+an ARM one. Do not run the in-container scripts directly on the host (`./dropbear/build_arm.sh`, `cd build && ./build_all_musl.sh`,
 ...) - it runs on your host instead of in the container, and fails partway through with a confusing error because your
-host is missing tools the container has. Every `build/*.sh` script enforces this itself: it checks for
+host is missing tools the container has. Every in-container build script enforces this itself: it checks for
 `TC002_TOOLS_CONTAINER=1` (set only inside the container image, see
 [build/docker-alpine-arm/Dockerfile](../build/docker-alpine-arm/Dockerfile)) and refuses to run with a clear message if
 it is not there. The scripts of the components that need the ARM musl compiler also check `TC002_TOOLCHAIN=musl` (also
@@ -126,7 +126,7 @@ set only by that image).
 `install/` and `tests/test_device_access.sh` are different: they talk to the device over `adb`/USB and run on your host,
 not in the container.
 
-`./verify.sh` checks what a build produced without needing the device: every artifact in `dist/` is ARM EABI hard-float,
+`./tests/verify.sh` checks what a build produced without needing the device: every artifact in `dist/` is ARM EABI hard-float,
 statically linked, stripped, contains no build-host path, and has a manifest.
 
 ### What `./build_all.sh` actually does
@@ -137,7 +137,7 @@ container image before every run (fast when the Dockerfile has not changed, than
 what makes it impossible to silently keep running against a stale image) and then runs the requested command inside
 it, with the repository bind-mounted. Before launching anything, `./build_all.sh` checks on the host whether everything
 requested is already built - if so, it reports that directly and skips the container launch entirely. Every build script
-prints how long it took when it finishes (`build_openssl.sh took 6m 42s (ok)`), and the full log of an image build is
+prints how long it took when it finishes (`openssl/build_arm.sh took 6m 42s (ok)`), and the full log of an image build is
 kept in `build/work-musl/image-build.log`.
 
 ## Shared build variables

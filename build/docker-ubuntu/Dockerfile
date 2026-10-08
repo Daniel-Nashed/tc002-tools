@@ -28,7 +28,7 @@ FROM ubuntu:${UBUNTU_VERSION}
 ARG DEBIAN_FRONTEND=noninteractive
 
 # build-essential: native gcc, g++, make, binutils - everything both
-# nshbox's own native test build (build/test_build_nshbox_native.sh, plain C)
+# nshbox's own native test build (nshbox/build_native.sh, plain C)
 # and the C++ test harness (tests/nshbox/) need. libmbedtls-dev: nshbox's
 # checksum commands use mbedTLS's digest functions, linked statically
 # (nshbox/src/makefile picks up libmbedcrypto.a), which needs the static

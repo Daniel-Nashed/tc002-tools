@@ -7,7 +7,7 @@ set. The upstream tools keep their own versions; those are pinned in [build/vers
 ## Making a release
 
 1. Set `NSHBOX_VERSION` in `nshbox/src/version.h` (`a.b.c`) and commit it.
-2. Run `./push-release.sh`. It writes `version.txt`, commits it if it changed, and re-creates and pushes the tag
+2. Run `./tools/release/push-release.sh`. It writes `version.txt`, commits it if it changed, and re-creates and pushes the tag
    `v<version>`. Same helper as in nshgeoip and nshmqtt.
 3. On GitHub, publish a release for that tag. `release.yml` runs when a release is published or edited: it stops if the
    tag does not match `nshbox/src/version.h`, builds everything in the prebuilt ARM image (`build.yml`, which uses
@@ -35,20 +35,20 @@ The on-demand tools (curl, nginx, 7-Zip, the OpenSSL CLI) are not part of releas
 
 | File                            | What it does                                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `push-release.sh`               | Writes `version.txt` from `version.h`, then tags and pushes `v<version>`                                           |
-| `create_release_taz.sh`         | Collects the files above from `dist/` into `release/` (used by `release.yml`, also runnable locally after a build) |
-| `pull-release.sh`               | Downloads a release into `dist/` and verifies it, so it can be deployed without building                           |
+| `tools/release/push-release.sh`               | Writes `version.txt` from `version.h`, then tags and pushes `v<version>`                                           |
+| `tools/release/create_release_taz.sh`         | Collects the files above from `dist/` into `release/` (used by `release.yml`, also runnable locally after a build) |
+| `tools/release/pull-release.sh`               | Downloads a release into `dist/` and verifies it, so it can be deployed without building                           |
 | `.github/workflows/image.yml`   | Builds the ARM build image and pushes it to the registry, once per set of inputs                                   |
-| `.github/workflows/build.yml`   | Builds the core deliverables in that image and runs `verify.sh`; runnable by hand                                  |
+| `.github/workflows/build.yml`   | Builds the core deliverables in that image and runs `tests/verify.sh`; runnable by hand                                  |
 | `.github/workflows/release.yml` | On a published release: builds, then uploads the release files                                                     |
 
 ## Deploying from a release, without building
 
-`./pull-release.sh` is the counterpart of `push-release.sh`: it downloads a release into `dist/` and verifies it, so
+`./tools/release/pull-release.sh` is the counterpart of `tools/release/push-release.sh`: it downloads a release into `dist/` and verifies it, so
 `./tc002_setup.sh` can deploy with no Docker and no compiler. It needs only `curl`, `tar` and `sha256sum`.
 
 ```sh
-./pull-release.sh
+./tools/release/pull-release.sh
 ```
 
 ```sh
@@ -61,7 +61,7 @@ Or in one step, which pulls first and then deploys (a version can follow `--rele
 ./tc002_setup.sh --release --ip 192.168.1.50
 ```
 
-- **Which release:** the version in `version.txt` by default (the latest release, by convention), or `./pull-release.sh
+- **Which release:** the version in `version.txt` by default (the latest release, by convention), or `./tools/release/pull-release.sh
   0.9.0`. The install and runtime scripts come from your checkout and are versioned together with the binaries, so a
   checkout of the same tag is the exact match; the script warns if the checkout is at another version.
 - **Verification:** the bundle is checked against its `.sha256` from the release, then every file inside against the
@@ -69,13 +69,13 @@ Or in one step, which pulls first and then deploys (a version can follow `--rele
 - **A local build is not overwritten** unless you pass `--force`. An earlier pull is replaced freely: a marker file,
   `dist/.pulled-release`, records what was pulled.
 - **Device discovery** needs `tc002-discover`, which releases do not include yet, so give the device address with
-  `--ip`. `./verify.sh` needs Docker and is for built artifacts; the checksum checks above replace it for a pulled
+  `--ip`. `./tests/verify.sh` needs Docker and is for built artifacts; the checksum checks above replace it for a pulled
   release.
 
 ## Updating a device directly from GitHub, without a host round-trip
 
 Once a device is deployed, `update-from-github` (installed to `INSTALL_PREFIX/bin` by `install_tools.sh`/
-`update_tools.sh`) does the same job as `pull-release.sh` above, but runs ON the device itself, over an
+`update_tools.sh`) does the same job as `tools/release/pull-release.sh` above, but runs ON the device itself, over an
 already-established SSH session, using `nshbox wget` instead of `curl` - no host with ADB/SSH reachability needed.
 Same trust model: this project's own releases, verified against the `.sha256` sidecar GitHub publishes next to each
 asset. See [`device_layout.md`](device_layout.md#update-from-github) for what it updates and what it deliberately

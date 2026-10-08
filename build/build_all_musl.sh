@@ -103,21 +103,21 @@ build_if_needed()
 if [ -z "$(ls -A "${REPO_ROOT}/nshbox/src" 2>/dev/null)" ]; then
   log "skipping nshbox: no source present yet (see nshbox/README.md)"
 else
-  build_if_needed "nshbox" "${DIST_DIR}/nshbox" "${SCRIPT_DIR}/build_nshbox.sh"
+  build_if_needed "nshbox" "${DIST_DIR}/nshbox" "${REPO_ROOT}/nshbox/build_arm.sh"
 fi
 
-build_if_needed "kilo" "${DIST_DIR}/kilo" "${SCRIPT_DIR}/build_kilo.sh"
-build_if_needed "gzip" "${DIST_DIR}/gzip" "${SCRIPT_DIR}/build_gzip.sh"
-build_if_needed "ncdu" "${DIST_DIR}/ncdu" "${SCRIPT_DIR}/build_ncdu.sh"
-build_if_needed "dropbear (multi-call: dropbear, scp, dropbearkey, dbclient, dropbearconvert)" "${DIST_DIR}/dropbearmulti" "${SCRIPT_DIR}/build_dropbear.sh"
-build_if_needed "CA trust bundle" "${CA_BUNDLE_INSTALL_DIR}/etc/ssl/certs/ca-certificates.crt" "${SCRIPT_DIR}/build_ca_bundle.sh"
+build_if_needed "kilo" "${DIST_DIR}/kilo" "${REPO_ROOT}/kilo/build_arm.sh"
+build_if_needed "gzip" "${DIST_DIR}/gzip" "${REPO_ROOT}/gzip/build_arm.sh"
+build_if_needed "ncdu" "${DIST_DIR}/ncdu" "${REPO_ROOT}/ncdu/build_arm.sh"
+build_if_needed "dropbear (multi-call: dropbear, scp, dropbearkey, dbclient, dropbearconvert)" "${DIST_DIR}/dropbearmulti" "${REPO_ROOT}/dropbear/build_arm.sh"
+build_if_needed "CA trust bundle" "${CA_BUNDLE_INSTALL_DIR}/etc/ssl/certs/ca-certificates.crt" "${REPO_ROOT}/ca-bundle/build_arm.sh"
 
 if [ "$WITH_CURL" -eq 1 ]; then
-  build_if_needed "curl (--with-curl, builds mbedTLS first if needed)" "${DIST_DIR}/curl" "${SCRIPT_DIR}/build_curl.sh"
+  build_if_needed "curl (--with-curl, builds mbedTLS first if needed)" "${DIST_DIR}/curl" "${REPO_ROOT}/curl/build_arm.sh"
 fi
 
 if [ "$WITH_7ZIP" -eq 1 ]; then
-  build_if_needed "7-Zip (--with-7zip)" "${DIST_DIR}/7zz" "${SCRIPT_DIR}/build_7zip.sh"
+  build_if_needed "7-Zip (--with-7zip)" "${DIST_DIR}/7zz" "${REPO_ROOT}/7zip/build_arm.sh"
 fi
 
 # OpenSSL is one build with two uses: the optional "openssl" CLI tool for the
@@ -126,15 +126,15 @@ fi
 # and takes real time), so --with-nginx alone still has to build it here -
 # not gated on --with-openssl, which stays about "do you also want the CLI".
 if [ "$WITH_OPENSSL" -eq 1 ] || [ "$WITH_NGINX" -eq 1 ]; then
-  build_if_needed "openssl (--with-openssl, or the TLS library nginx needs)" "$OPENSSL_CLI" "${SCRIPT_DIR}/build_openssl.sh"
+  build_if_needed "openssl (--with-openssl, or the TLS library nginx needs)" "$OPENSSL_CLI" "${REPO_ROOT}/openssl/build_arm.sh"
 fi
 
 if [ "$WITH_NGINX" -eq 1 ]; then
   if [ ! -f "$OPENSSL_SDK_LIB" ]; then
-    die "nginx needs OpenSSL's static libraries at ${OPENSSL_SDK_LIB}, which are missing - build_openssl.sh should have produced them just above"
+    die "nginx needs OpenSSL's static libraries at ${OPENSSL_SDK_LIB}, which are missing - openssl/build_arm.sh should have produced them just above"
   fi
 
-  build_if_needed "nginx (--with-nginx)" "${DIST_DIR}/nginx" "${SCRIPT_DIR}/build_nginx.sh"
+  build_if_needed "nginx (--with-nginx)" "${DIST_DIR}/nginx" "${REPO_ROOT}/nginx/build_arm.sh"
 fi
 
 header "build-all (musl) complete: ${DIST_DIR}"

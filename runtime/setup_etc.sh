@@ -164,7 +164,7 @@ do
 done
 
 # Optional overrides - not every device has these staged yet (the CA
-# bundle needs build/build_ca_bundle.sh to have run at least once) - skip quietly
+# bundle needs ca-bundle/build_arm.sh to have run at least once) - skip quietly
 # rather than blocking Dropbear/SSH startup over something only curl needs.
 for name in ssl/certs/ca-certificates.crt
 do

@@ -5,10 +5,10 @@
 # Prints the tag that identifies the ARM build image: a hash of what decides its
 # contents - the Dockerfile, ALPINE_VERSION and MCM_COMMIT (build/versions.env).
 # The same inputs always give the same tag, so a local build, the image CI
-# publishes and the one ./pull_build_image.sh fetches are recognisably the same
+# publishes and the one ./build/pull_build_image.sh fetches are recognisably the same
 # image, and an image with this tag never needs to be built again.
 #
-# Used by run.sh (build only if the tag is missing), by ./pull_build_image.sh and
+# Used by run.sh (build only if the tag is missing), by ./build/pull_build_image.sh and
 # by .github/workflows/image.yml - one calculation, so they cannot drift apart.
 
 set -eu

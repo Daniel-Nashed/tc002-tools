@@ -7,16 +7,16 @@ reimplementations actually behave the way they claim to - not just that they com
 ## What to actually type
 
 ```sh
-./test_nshbox.sh
+./nshbox/test.sh
 ```
 
 Runs entirely inside a separate Ubuntu container - see [build/docker-ubuntu/README.md](../../build/docker-ubuntu/README.md)
 for why this needs a different container than the ARM cross-build one. One command: builds nshbox natively
 (dynamically linked, for the host's own architecture - not the ARM device binary, and deliberately not
-[build/test_build_nshbox_native.sh](../../build/test_build_nshbox_native.sh)'s statically-linked build, which exists to let
+[nshbox/build_native.sh](../../nshbox/build_native.sh)'s statically-linked build, which exists to let
 that binary be copied out and run on an arbitrary host - this one never leaves the container it was built in, so
 plain dynamic linking is simpler and avoids a real link failure a static build hits against a modern OpenSSL 3.x, see
-[build/test_nshbox_functional.sh](../../build/test_nshbox_functional.sh)'s own comment), builds this test harness,
+[nshbox/test_functional.sh](../../nshbox/test_functional.sh)'s own comment), builds this test harness,
 and runs it - printing `PASS`/`FAIL` per test and a summary, with a non-zero exit code if anything failed.
 
 ## Scope: what this does and does not prove
@@ -24,7 +24,7 @@ and runs it - printing `PASS`/`FAIL` per test and a summary, with a non-zero exi
 This tests **logic correctness** - parsing, formatting, edge cases - by running nshbox compiled for the host's architecture against real
 reference tools in a controlled environment. It does **not** replace on-device verification for anything
 platform-specific: the TC002's ancient OpenSSL 1.1.0i quirks, BusyBox gaps, or ARM-specific behavior are still the
-job of `verify.sh` (artifact shape) and manual on-device testing (see [docs/architecture.md](../../docs/architecture.md)'s
+job of `tests/verify.sh` (artifact shape) and manual on-device testing (see [docs/architecture.md](../../docs/architecture.md)'s
 "Verified vs. experimental"). A command whose whole point is reporting the *running system's own* live state
 (`sysinfo`, `top`, `vmstat`, `iostat`, `ps`, `netstat`) is not something you diff byte-for-byte against a reference
 tool run a moment later on a live system either - those are out of scope for this harness's diff-based approach and
@@ -137,7 +137,7 @@ parameterized tests, just "run this, assert on the result."
   for the next one to trip over. This is the actual payoff of using C++ classes for tests here.
 - **`ASSERT_EQ(actual, expected, context)`** / **`ASSERT_TRUE(condition, context)`** throw `TestFailure` on
   mismatch, caught by `TestRegistry::run_all()` so one failing assertion fails only its own test, not the whole run.
-- **`main.cpp`** takes the nshbox binary path as `argv[1]` (set by `build/test_nshbox_functional.sh`, never assumed)
+- **`main.cpp`** takes the nshbox binary path as `argv[1]` (set by `nshbox/test_functional.sh`, never assumed)
   and forces `LC_ALL=C` for the whole process before running anything - nshbox has no locale awareness at all (no
   `setlocale()`/`strcoll()` anywhere in `nshbox.c`, confirmed), so this keeps the real reference tools' own collation
   (`sort`, `grep`) matching nshbox's plain byte comparison regardless of the container image's default locale.
@@ -166,4 +166,4 @@ TEST_CASE(SortEmptyFile, "sort: empty file")
 ```
 
 Save it as `tests/nshbox/test_<something>.cpp` (an existing file if it belongs with related tests, a new one
-otherwise) - the Makefile finds it on the next `./test_nshbox.sh` run with no other change needed.
+otherwise) - the Makefile finds it on the next `./nshbox/test.sh` run with no other change needed.

@@ -23,7 +23,7 @@ LDFLAGS = -Wl,--gc-sections -lresolv
 #
 # MBEDTLS_DIR: prefix with include/ and lib/{libmbedtls,libmbedx509,
 # libmbedcrypto}.a - the ARM build passes the mbedTLS this project builds
-# itself (build/build_mbedtls.sh, which already produces and installs all
+# itself (mbedtls/build_arm.sh, which already produces and installs all
 # three - see its own package_artifacts()). Empty (the default) uses the
 # system's libmbedtls-dev, which is what the native test container has.
 MBEDTLS_DIR =

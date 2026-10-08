@@ -163,14 +163,14 @@ require_device()
 #                                                        install_awtrix_autostart.sh, skipped with
 #                                                        a log line on a non-AWTRIX device)
 # vim (+vim.bin, wrapper, defaults.vim)                 persistent - OPTIONAL, not
-#                                                        built by default (./build_vim.sh); ~1.4 MB
+#                                                        built by default (./vim/build.sh); ~1.4 MB
 #                                                        static but kept persistent, not
 #                                                        compressed-on-demand, since it owns
 #                                                        vi/edit and those need to start instantly;
 #                                                        see install_vim.sh
 # update-from-github                                    persistent - a small checked-in script,
 #                                                        not a compiled binary; the on-device
-#                                                        counterpart of ../pull-release.sh, pulls a
+#                                                        counterpart of ../tools/release/pull-release.sh, pulls a
 #                                                        newer release of this project's own core
 #                                                        tools straight from GitHub - see
 #                                                        runtime/update_from_github.sh
@@ -368,7 +368,7 @@ on_demand_tools()
 # Where each on-demand tool's built artifact actually lives under dist/ -
 # a flat "${DIST_DIR}/${name}" for most (curl, nginx, 7zz), but openssl's
 # CLI binary sits nested inside its own sdk/device tree
-# (see build_openssl.sh's own layout comments), not at a top-level
+# (see openssl/build_arm.sh's own layout comments), not at a top-level
 # "dist/openssl" - that path is already the whole openssl build's output
 # directory, not a single file. install_on_demand.sh uses this instead of
 # assuming every tool is flat.

@@ -11,7 +11,7 @@
 # runs it, in its own separate native Alpine container (build/docker-alpine/
 # - see that directory's own README), not the ARM cross-compile one. So it is
 # built here, as its own step, before the ARM container - see
-# build_tc002-discover.sh.
+# tc002-discover/build.sh.
 #
 # Always built: nshbox, kilo, gzip, ncdu, dropbear, the CA trust bundle,
 # tc002-discover. Opt-in (each a real, minutes-long compile): curl, nginx,
@@ -27,7 +27,7 @@
 #                                            # built: those stay opt-in per run. Add --all (or
 #                                            # the specific --with-X flags) too:
 #   ./build_all.sh --rebuild --all          # actually forces a full rebuild of everything
-#   ./build_dropbear.sh                     # just one component (each build_*.sh here does its own)
+#   ./dropbear/build.sh                     # just one component (each <name>/build.sh does its own)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,7 +84,7 @@ if [ $# -eq 0 ] || [ "${1#-}" != "$1" ]; then
 
   if [ "$REBUILD" -eq 1 ] || [ ! -f "${DIST_DIR}/tc002-discover" ]; then
     header "build-all: tc002-discover (separate native Alpine container)"
-    "${SCRIPT_DIR}/build_tc002-discover.sh"
+    "${SCRIPT_DIR}/tc002-discover/build.sh"
   else
     log "skipping tc002-discover: already built at ${DIST_DIR}/tc002-discover (--rebuild to force)"
   fi
@@ -131,6 +131,6 @@ if [ $# -eq 0 ] || [ "${1#-}" != "$1" ]; then
   exec "$MUSL_RUN" build/build_all_musl.sh ${MUSL_ARGS[@]+"${MUSL_ARGS[@]}"}
 else
   # The "run one specific script directly" path (e.g. "./build_all.sh
-  # build/build_nginx.sh").
+  # nginx/build_arm.sh").
   exec "$MUSL_RUN" "$@"
 fi

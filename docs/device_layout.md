@@ -18,7 +18,7 @@
 /data/etc-overrides/passwd         (staged default, pushed by install_etc.sh - see below)
 /data/etc-overrides/group          (staged default, pushed by install_etc.sh - see below)
 /data/etc-overrides/resolv.conf    (staged default, pushed by install_etc.sh - see below)
-/data/etc-overrides/ssl/certs/ca-certificates.crt  (staged default, from build_openssl.sh - see "Deployment modes")
+/data/etc-overrides/ssl/certs/ca-certificates.crt  (staged default, from ca-bundle/build.sh - see "Deployment modes")
 /data/bin/nshbox                   (optional component)
 /data/bin/kilo                     (optional component)
 /data/bin/gzip                     (optional component - also the compressed-on-demand tier's decompressor)
@@ -181,7 +181,7 @@ ncurses always reads from files at runtime, and the TC002 has no terminfo databa
 204 KB it is smaller than either of those by 5-16x, not worth the on-demand tier's own overhead.
 `install/install_etc.sh`'s `push_ncdu()` installs three things instead of one: the real binary at
 `/data/bin/ncdu.bin`, a handful of terminfo entries (`xterm-256color`, `xterm`, `vt100`, `screen-256color`, `linux` -
-packaged into `dist/ncdu-terminfo` by `build/build_ncdu.sh`'s `package_terminfo()`, from the build container's own
+packaged into `dist/ncdu-terminfo` by `ncdu/build_arm.sh`'s `package_terminfo()`, from the build container's own
 terminfo database) at `/data/share/terminfo`, and `runtime/ncdu.sh` - a thin wrapper, deployed as `/data/bin/ncdu`
 itself - that sets `TERMINFO=/data/share/terminfo` before `exec`ing `ncdu.bin`. Plain `ncdu` on the device just
 works this way, regardless of what `$TERM` the connecting SSH client sends, with no manual step - the same
@@ -246,7 +246,7 @@ to be excluded the same way (built and pushed by hand, never through
 `deploy.sh`) but now joins the compressed-on-demand tier above like any
 other optional tool - see [`../7zip/README.md`](../7zip/README.md) for
 why it wasn't automated sooner, and `./build_all.sh --with-7zip` (or
-`./build_7zip.sh` directly) to build it.
+`./7zip/build.sh` directly) to build it.
 
 **persistent** - `INSTALL_PREFIX/bin/<tool>` (`/data/bin/<tool>`), pushed by
 `install/install_binary()` and surviving reboot. This is every mode this
@@ -340,9 +340,9 @@ adding real diagnostics back in.
 ### vim
 
 OPTIONAL - not everyone wants the flash space spent on a second editor beyond kilo, so unlike
-every other optional component in this project, **building it does not imply deploying it**: `./build_vim.sh`
+every other optional component in this project, **building it does not imply deploying it**: `./vim/build.sh`
 builds AND pushes in one command (both steps run on the host - the build container has no path to the device at
-all), but it is never run by `deploy.sh` itself. See [`../build/build_vim.sh`](../build/build_vim.sh) for the full
+all), but it is never run by `deploy.sh` itself. See [`../vim/build_arm.sh`](../vim/build_arm.sh) for the full
 cross-compile story (`--with-features=tiny`, `--with-tlib=ncursesw` to work around a real vim cross-compile
 failure mode, static, ~1.4 MB stripped) and [`../install/install_vim.sh`](../install/install_vim.sh) for what
 gets pushed:
@@ -367,7 +367,7 @@ gets pushed:
 
 ### update-from-github
 
-The on-device counterpart of [`../pull-release.sh`](../pull-release.sh), which does the same job from the host over
+The on-device counterpart of [`../tools/release/pull-release.sh`](../tools/release/pull-release.sh), which does the same job from the host over
 ADB/SSH: pulls a newer release of this project's own core tools straight from GitHub, on the device itself, over an
 already-established SSH session - no host round-trip needed. Installed as `INSTALL_PREFIX/bin/update-from-github` by
 `install/install_tools.sh` (ADB, first install) and `install/update_tools.sh` (SSH, updates) - see
@@ -383,7 +383,7 @@ device - this is an update, not an install: a tool this device was never given (
 deployment) is skipped, not added. Uses `nshbox wget` (TLS + CA-bundle
 verification, redirect following - see [`../nshbox/README.md`](../nshbox/README.md)) against the same
 per-asset `.sha256` sidecar files every release already publishes (see [`releasing.md`](releasing.md)) - no separate
-checksum manifest, same trust model as `pull-release.sh`. With no version given (or `latest` explicitly), the real
+checksum manifest, same trust model as `tools/release/pull-release.sh`. With no version given (or `latest` explicitly), the real
 tag is read off `wget`'s own redirect-notice line when it follows `github.com/<repo>/releases/latest` - nshbox has
 no JSON parsing, so this avoids needing the GitHub API or `jq` on-device for that one field.
 
@@ -410,8 +410,8 @@ already installed for the container's own HTTPS needs - naturally kept current e
 rebuilt, and reflects whatever roots that environment's owner has actually configured, corporate-injected ones
 included).
 
-This is its **own** build step, [`../build/build_ca_bundle.sh`](../build/build_ca_bundle.sh) - deliberately not
-part of `build_openssl.sh`, even though it used to be. Producing the bundle is just one `cp`, with zero dependency
+This is its **own** build step, [`../ca-bundle/build_arm.sh`](../ca-bundle/build_arm.sh) - deliberately not
+part of `openssl/build.sh`, even though it used to be. Producing the bundle is just one `cp`, with zero dependency
 on actually cross-compiling OpenSSL, so tying it to that much slower, genuinely optional build meant declining the
 OpenSSL CLI silently broke curl's HTTPS too - confirmed as a real failure, not a hypothetical one (`mbedTLS: error
 reading CA cert file ...: PK - Read/write of file failed` on a real device). `./build_all.sh` now builds the CA

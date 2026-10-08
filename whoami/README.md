@@ -8,7 +8,7 @@ A small, standalone **testing** tool - **not** part of `nshbox`, not installed b
 
 It answers one question: **how much does statically linking a TLS library actually add to a stripped ARM32 musl
 binary?** Built with this project's own already-verified static musl toolchain and mbedTLS/OpenSSL builds (see
-[../build/build_mbedtls.sh](../build/build_mbedtls.sh) and [../build/build_openssl.sh](../build/build_openssl.sh)),
+[../mbedtls/build_arm.sh](../mbedtls/build_arm.sh) and [../openssl/build_arm.sh](../openssl/build_arm.sh)),
 so the numbers are the real, already-trusted ones this project ships with, not a guess from a different
 platform/compiler. That trade-off (see Results below) is worth knowing before committing to either library on a
 constrained ARM32/musl target.
@@ -41,9 +41,9 @@ size question above.
   can differ between the two binaries' sizes is the TLS library itself.
 - **`build_arm.sh`** - builds `certgen_mbedtls`/`whoami_mbedtls` always, and `certgen_openssl`/`whoami_openssl` too
   if OpenSSL has been built, statically, against this project's own ARM32 musl builds of each library
-  (`build/build_mbedtls.sh`/`build/build_openssl.sh`'s output) - the exact same static libs curl/nginx/nshbox
+  (`mbedtls/build_arm.sh`/`openssl/build_arm.sh`'s output) - the exact same static libs curl/nginx/nshbox
   already link (the OpenSSL binaries also get `-ldl -pthread -latomic`, confirmed directly against the real
-  generated OpenSSL Makefile's `CNF_EX_LIBS` for this target - see `build/build_openssl.sh`), `-Os
+  generated OpenSSL Makefile's `CNF_EX_LIBS` for this target - see `openssl/build_arm.sh`), `-Os
   -ffunction-sections -fdata-sections` + `-Wl,--gc-sections`, stripped.
 
 ## Building
@@ -51,13 +51,13 @@ size question above.
 From the repo root:
 
 ```sh
-./build_mbedtls.sh          # if not already built
-./build_openssl.sh          # optional - only needed for the OpenSSL binaries; skipped with a log line if absent
-./build_whoami.sh
+./mbedtls/build.sh          # if not already built
+./openssl/build.sh          # optional - only needed for the OpenSSL binaries; skipped with a log line if absent
+./whoami/build.sh
 ```
 
-(`./build_whoami.sh` is the same one-line `build/docker-alpine-arm/run.sh whoami/build_arm.sh` wrapper every other
-component has - `./build_nshbox.sh`, `./build_mbedtls.sh`, etc.)
+(`./whoami/build.sh` is the same one-line `build/docker-alpine-arm/run.sh whoami/build_arm.sh` wrapper every other
+component has - `./nshbox/build.sh`, `./mbedtls/build.sh`, etc.)
 
 ## Running (on the device, or under `qemu-arm`)
 

@@ -24,28 +24,28 @@ source "$(dirname "${BASH_SOURCE[0]}")/versions.env"
 DIST_DIR="${REPO_ROOT}/dist"
 WORK_DIR="${REPO_ROOT}/build/work"
 
-# Where build_mbedtls.sh installs its static libraries/headers for
-# build_curl.sh's --with-mbedtls to consume - shared here so the two
+# Where mbedtls/build_arm.sh installs its static libraries/headers for
+# curl/build_arm.sh's --with-mbedtls to consume - shared here so the two
 # scripts cannot drift apart on the path.
 MBEDTLS_INSTALL_DIR="${WORK_DIR}/mbedtls-install"
 
-# Where build_tweetnacl.sh installs tweetnacl.c/tweetnacl.h for
+# Where tweetnacl/build_arm.sh installs tweetnacl.c/tweetnacl.h for
 # jwt-verify/build_arm.sh to consume - same reasoning as MBEDTLS_INSTALL_DIR
 # above.
 TWEETNACL_INSTALL_DIR="${WORK_DIR}/tweetnacl-install"
 
-# Where build_openssl.sh installs its shared libraries/headers, staged
+# Where openssl/build_arm.sh installs its shared libraries/headers, staged
 # under a "data/" and "etc/" layout matching exactly where they need to
 # land on the device (--prefix=/data --openssldir=/etc/ssl) - see
-# build_openssl.sh and openssl/README.md. Under DIST_DIR, not WORK_DIR,
+# openssl/build_arm.sh and openssl/README.md. Under DIST_DIR, not WORK_DIR,
 # because unlike mbedTLS (a build-time-only dependency baked statically
 # into curl) this is itself a multi-file deliverable that has to be
-# pushed to the device - build_nginx.sh links against it from here
+# pushed to the device - nginx/build_arm.sh links against it from here
 # directly, at build time, from the very same tree that eventually gets
 # deployed.
 OPENSSL_INSTALL_DIR="${DIST_DIR}/openssl"
 
-# Where build_ca_bundle.sh packages the root CA trust bundle - its own
+# Where ca-bundle/build_arm.sh packages the root CA trust bundle - its own
 # tree, not nested under OPENSSL_INSTALL_DIR, deliberately: the bundle is
 # just a "cp" from this container's own OS trust store (which may already
 # carry corporate-injected roots - using it beats generating a fresh one
@@ -121,7 +121,7 @@ require_cmd()
 require_musl_toolchain()
 {
   if [ "${TC002_TOOLCHAIN:-}" != "musl" ]; then
-    die "this component is built with the static musl toolchain - use its root ./build_*.sh wrapper (or ./build_all.sh), which runs it in build/docker-alpine-arm"
+    die "this component is built with the static musl toolchain - use its <name>/build.sh wrapper (or ./build_all.sh), which runs it in build/docker-alpine-arm"
   fi
 }
 
@@ -144,13 +144,13 @@ verify_static_binary()
 
 # Refuses to run a build script outside a tc002-tools build container - the
 # container sets TC002_TOOLS_CONTAINER=1 (see build/docker-alpine-arm/Dockerfile).
-# Running build_dropbear.sh/build_nshbox.sh directly on an unprepared host
+# Running dropbear/build_arm.sh or nshbox/build_arm.sh directly on an unprepared host
 # fails partway through with a confusing "tar: Cannot exec bzip2"-style
 # error instead of this clear one - see docs/build_platform.md.
 require_container()
 {
   if [ "${TC002_TOOLS_CONTAINER:-}" != "1" ]; then
-    die "this must run inside a tc002-tools build container - use the root ./build_*.sh wrapper, or build/docker-alpine-arm/run.sh build/<script>.sh (see build/docker-alpine-arm/README.md)."
+    die "this must run inside a tc002-tools build container - use the <name>/build.sh wrapper, or build/docker-alpine-arm/run.sh <name>/build_arm.sh (see build/docker-alpine-arm/README.md)."
   fi
 }
 
@@ -276,7 +276,15 @@ if [ -z "${TC002_TOOLS_SKIP_MAKEFLAGS_BANNER:-}" ]; then
       status="FAILED, exit code ${exit_code}"
     fi
 
-    log "$(basename "$0") took $(( elapsed / 60 ))m $(( elapsed % 60 ))s (${status})"
+    # Every component has its own build_arm.sh / build_native.sh, so those are
+    # reported with their directory (nginx/build_arm.sh took ...).
+    local script_name
+    script_name="$(basename "$0")"
+    case "$script_name" in
+      build_arm.sh|build_native.sh) script_name="$(basename "$(dirname "$0")")/${script_name}" ;;
+    esac
+
+    log "${script_name} took $(( elapsed / 60 ))m $(( elapsed % 60 ))s (${status})"
   }
 
   trap print_build_elapsed EXIT

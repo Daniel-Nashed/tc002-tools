@@ -2,7 +2,7 @@
 # Standard entrypoint for running anything under build/ inside the
 # tc002-tools-build-alpine container - the Alpine/musl native-build
 # counterpart to build/docker-alpine-arm/run.sh, used only by
-# build/build_tc002-discover.sh (see build/docker-alpine/Dockerfile for
+# tc002-discover/build_native.sh (see build/docker-alpine/Dockerfile for
 # why this tool needs a separate, non-cross-compiling image). Always
 # rebuilds the image first - cheap and near-instant when the Dockerfile
 # has not changed (Docker's own layer cache), same reasoning as
@@ -10,7 +10,7 @@
 #
 # Usage:
 #   build/docker-alpine/run.sh                          # interactive shell
-#   build/docker-alpine/run.sh build/build_tc002-discover.sh
+#   build/docker-alpine/run.sh tc002-discover/build_native.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,7 +26,13 @@ docker build --build-arg ALPINE_VERSION="$ALPINE_VERSION" -t "$IMAGE" "$SCRIPT_D
 
 # Every container gets a readable, unique name (image, what it runs, this script's
 # process id), so "docker ps" shows what is running and parallel runs do not clash.
-CONTAINER_LABEL="$(printf '%s' "$(basename "${1:-shell}" .sh)" | tr -c 'A-Za-z0-9_.-' '_')"
+# Components all have a build_arm.sh / build_native.sh, so the component
+# directory is part of the label (nginx-build_arm, not just build_arm).
+CONTAINER_LABEL="$(basename "${1:-shell}" .sh)"
+case "${1:-}" in
+  */build_arm.sh|*/build_native.sh) CONTAINER_LABEL="$(basename "$(dirname "$1")")-${CONTAINER_LABEL}" ;;
+esac
+CONTAINER_LABEL="$(printf '%s' "$CONTAINER_LABEL" | tr -c 'A-Za-z0-9_.-' '_')"
 CONTAINER_NAME="${IMAGE}-${CONTAINER_LABEL}-$$"
 
 # The commit is asked on the host: inside the container git refuses the mounted

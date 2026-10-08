@@ -54,7 +54,7 @@ jobs:
           source build/versions.env
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           image="ghcr.io/${owner}/tc002-tools-build-musl"
-          # The same calculation run.sh and pull_build_image.sh use
+          # The same calculation run.sh and build/pull_build_image.sh use
           tag="$(build/docker-alpine-arm/image-tag.sh)"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"

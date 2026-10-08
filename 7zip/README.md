@@ -10,7 +10,7 @@ Independent of every other component in this project; none of them depend on it 
 Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for its
 license (mostly GNU LGPL 2.1+, with a few files under BSD-3/BSD-2/public domain, and the RAR-decompression code
 under LGPL plus an additional "unRAR license restriction" - see that file for the exact breakdown). No source is
-vendored into this repository; `build/build_7zip.sh` downloads the pinned release tarball fresh at build time, the
+vendored into this repository; `7zip/build_arm.sh` downloads the pinned release tarball fresh at build time, the
 same way every other `build/` script here handles its upstream source.
 
 ## Official 7-Zip source, not p7zip
@@ -29,7 +29,7 @@ the established pattern.
 
 ## The first C++ component here
 
-Every other component in this project is plain C. 7-Zip's real source is C++, so `build/build_7zip.sh` needs
+Every other component in this project is plain C. 7-Zip's real source is C++, so `7zip/build_arm.sh` needs
 a C++ compiler, not just the C one every other build here uses. The musl-cross-make toolchain in
 [../build/docker-alpine-arm/Dockerfile](../build/docker-alpine-arm/Dockerfile) builds a `g++` and a static libstdc++ as
 part of the compiler.
@@ -46,7 +46,7 @@ vendored tool here (curl, ncdu, gzip all keep their own upstream binary names to
 Unlike every autotools-based component here, 7-Zip's own build system is a set of plain GNU Makefiles with no
 `configure` step at all - but it already has real cross-compilation support built in, via a `CROSS_COMPILE`
 variable (the same convention the Linux kernel and most embedded toolchains use), confirmed directly in the real
-`CPP/7zip/var_gcc_arm.mak`/`cmpl_gcc_arm.mak`. `build/build_7zip.sh` builds via:
+`CPP/7zip/var_gcc_arm.mak`/`cmpl_gcc_arm.mak`. `7zip/build_arm.sh` builds via:
 
 ```sh
 cd CPP/7zip/Bundles/Alone2
@@ -65,7 +65,7 @@ plain C/C++ build on this target regardless.
 
 `CFLAGS_WARN` is picked by 7-Zip's own `warn_gcc.mak` from the compiler version (several sequential reassignments, one
 per GCC version, the last one winning). The musl toolchain's GCC is new enough (9 or later), so the default set applies and
-`build/build_7zip.sh` does not override it. (An older, since removed GCC 8 toolchain needed an override because a warning
+`7zip/build_arm.sh` does not override it. (An older, since removed GCC 8 toolchain needed an override because a warning
 flag only exists from GCC 9; if a newer 7-Zip ever adds a flag this GCC does not know, the build fails with
 `unrecognized command line option` - override `CFLAGS_WARN` then.)
 
@@ -74,17 +74,17 @@ flag only exists from GCC 9; if a newer 7-Zip ever adds a flag this GCC does not
 7zz is built fully static (`LDFLAGS_STATIC_3=-static`, a real built-in knob in 7-Zip's own `var_gcc_arm.mak`): libstdc++
 and musl are linked in, so the binary needs nothing on the device - no `libstdc++.so.6`, no matching libc, no NSS
 problem. That is the same reasoning as for every other component here (see
-[../docs/musl_migration.md](../docs/musl_migration.md)); `build/build_7zip.sh` checks that the result has no NEEDED
+[../docs/musl_migration.md](../docs/musl_migration.md)); `7zip/build_arm.sh` checks that the result has no NEEDED
 entries and no program interpreter. Size is kept down with `-Os`, `-ffunction-sections`/`-fdata-sections` and
 `-Wl,--gc-sections` (see "Build"): 2.27 MB without, about 1.7 MB with. (An earlier version of this project linked 7zz
 dynamically to save flash; that needed the device's own `libstdc++.so.6` and was dropped in favour of static musl.)
 
-7-Zip's own build already strips the binary while linking (`-s` in the linker flags), so `build/build_7zip.sh` skips the
+7-Zip's own build already strips the binary while linking (`-s` in the linker flags), so `7zip/build_arm.sh` skips the
 separate `strip` step other components need.
 
 ## No RAR support
 
-`build/build_7zip.sh` builds with `DISABLE_RAR=1 DISABLE_RAR_COMPRESS=1` - the only format-level trim 7-Zip's own
+`7zip/build_arm.sh` builds with `DISABLE_RAR=1 DISABLE_RAR_COMPRESS=1` - the only format-level trim 7-Zip's own
 build system officially supports (confirmed directly: no other bundled format - zip, tar, cab, chm, and the rest -
 has an equivalent knob; trimming any of those would mean patching 7-Zip's own source, which this project has
 consistently avoided for vendored tools). Not requested, and saves a real, confirmed ~131KB (~6%, measured with vs.
@@ -95,7 +95,7 @@ reads and writes every other format it supports by default (`.7z`, `.zip`, `.tar
 ## Build
 
 ```sh
-./build_7zip.sh
+./7zip/build.sh
 ```
 
 Runs in the Alpine ARM32 musl container ([../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)).
@@ -109,4 +109,4 @@ Built fully static with the musl toolchain in this project's own Alpine containe
 entries, no program interpreter), with a correct manifest. It joins the compressed-on-demand tier (with
 curl/nginx/openssl - see [../docs/device_layout.md](../docs/device_layout.md#deployment-modes)) rather than being
 pushed by hand: at that size it is closer to curl than to any persistent tool this project ships. Opt-in, not built by
-`./build_all.sh` on its own - either `./build_7zip.sh` directly, or `./build_all.sh --with-7zip` (or `--all`).
+`./build_all.sh` on its own - either `./7zip/build.sh` directly, or `./build_all.sh --with-7zip` (or `--all`).

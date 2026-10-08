@@ -7,7 +7,7 @@ beats guessing at an embedded shim's exact flag support and behavior. Independen
 `ncdu`, `curl`, and nginx; none of them depend on it or on each other.
 
 Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for its
-license (GPLv3). No source is vendored into this repository; `build/build_gzip.sh` downloads the pinned release
+license (GPLv3). No source is vendored into this repository; `gzip/build_arm.sh` downloads the pinned release
 tarball fresh at build time, the same way every other `build/` script here handles its upstream source.
 
 ## No zlib dependency
@@ -15,13 +15,13 @@ tarball fresh at build time, the same way every other `build/` script here handl
 Unlike curl's or nginx's own bundled zlib usage, GNU gzip has its own from-scratch `deflate`/inflate implementation
 (`deflate.c` in its real source) - confirmed directly, 2026-09-13, that its `configure.ac` never mentions zlib or
 `libz` at all. There is nothing to statically link here the way curl's zlib or nginx's zlib needed - `gzip` only
-ever depends on libc. It is now linked fully static against musl, so `build/build_gzip.sh`'s `verify_artifact()`
+ever depends on libc. It is now linked fully static against musl, so `gzip/build_arm.sh`'s `verify_artifact()`
 requires no NEEDED entry at all (`readelf -d`) and no program interpreter.
 
 ## Build
 
 ```sh
-./build_gzip.sh
+./gzip/build.sh
 ```
 
 Runs in the Alpine ARM32 musl container ([../build/docker-alpine-arm/README.md](../build/docker-alpine-arm/README.md)).

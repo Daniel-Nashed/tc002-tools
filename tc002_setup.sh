@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # THE command to set up a TC002 device from scratch. Runs directly on
 # your host (not in the build container - deployment talks to a real
-# device over ADB, unlike build/*.sh, which cross-compile inside a
+# device over ADB, unlike the component build scripts, which cross-compile inside a
 # disposable container). Build first: ./build_all.sh (dropbear, nshbox,
 # kilo, gzip, ncdu, tc002-discover, and the CA bundle - everything
 # required, no flag needed); add --with-curl/--with-nginx/--with-openssl/
 # --with-7zip (or --all) for the optional compressed-on-demand tools.
 #
 # Or skip the build: --release pulls the binaries of a GitHub release into
-# dist/ first (./pull-release.sh), then deploys them.
+# dist/ first (./tools/release/pull-release.sh), then deploys them.
 #
 # Usage:
 #   ./tc002_setup.sh                       # full setup (install/deploy.sh)
@@ -46,7 +46,7 @@ do
 done
 
 if [ "$PULL" -eq 1 ]; then
-  "${SCRIPT_DIR}/pull-release.sh" ${PULL_VERSION:+"$PULL_VERSION"}
+  "${SCRIPT_DIR}/tools/release/pull-release.sh" ${PULL_VERSION:+"$PULL_VERSION"}
 fi
 
 exec "${SCRIPT_DIR}/install/deploy.sh" ${ARGS[@]+"${ARGS[@]}"}

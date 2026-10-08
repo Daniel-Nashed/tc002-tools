@@ -121,7 +121,7 @@ push_kilo_wrapper()
 }
 
 # Pushes runtime/update_from_github.sh as INSTALL_PREFIX/bin/update-from-github
-# - the on-device counterpart of ../pull-release.sh, letting an admin pull a
+# - the on-device counterpart of ../tools/release/pull-release.sh, letting an admin pull a
 # newer release of this project's own core tools straight from GitHub over an
 # already-established SSH session, with no host round-trip. A checked-in
 # script, not a build artifact, so unlike SIMPLE_TOOLS there is nothing to

@@ -8115,7 +8115,7 @@ static int wget_read_line(wget_conn_t *c, char *buf, size_t cap)
 
 typedef struct {
     int status;
-    char location[2048];
+    char location[WGET_LINE_MAX];   /* a header line can never be longer, so no silent truncation */
     long content_length;   /* -1 = not given (read until close) */
 } wget_response_t;
 

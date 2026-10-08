@@ -9,7 +9,7 @@
 # DATA (terminfo), which ncurses always reads from files at runtime, and
 # the TC002 has no terminfo database of its own. install/install_etc.sh
 # also pushes a handful of terminfo entries to /data/share/terminfo
-# (packaged by build/build_ncdu.sh's package_terminfo()); TERMINFO here
+# (packaged by ncdu/build_arm.sh's package_terminfo()); TERMINFO here
 # points ncurses at them, so plain "ncdu" just works regardless of what
 # $TERM the connecting SSH client sends, with no manual step.
 #

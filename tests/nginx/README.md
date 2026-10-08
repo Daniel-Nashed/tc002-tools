@@ -12,7 +12,7 @@ exact build, a test page, a script that makes a throwaway certificate, and a scr
 
 ## What to type
 
-nginx has to be deployed first (`./build_nginx.sh`, then `install/install_on_demand.sh` or a full `./tc002_setup.sh`;
+nginx has to be deployed first (`./nginx/build.sh`, then `install/install_on_demand.sh` or a full `./tc002_setup.sh`;
 `/data/bin/nginx` must exist on the device). Then, from the repository root:
 
 ```sh

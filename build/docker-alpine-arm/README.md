@@ -20,7 +20,7 @@ dynamic binaries is gone.
 ## What is in it
 
 The image is used by its tag, a hash of the inputs (see [../../docs/build_platform.md](../../docs/build_platform.md)),
-and is built only when that tag is missing locally; `./pull_build_image.sh` fetches the published one instead.
+and is built only when that tag is missing locally; `./build/pull_build_image.sh` fetches the published one instead.
 
 Alpine does not package an ARM32 musl cross compiler, so the image builds one from source with
 [musl-cross-make](https://github.com/richfelker/musl-cross-make), pinned to one commit (`MCM_COMMIT` in
@@ -32,8 +32,8 @@ musl-cross-make checks the SHA-1 of every source tarball it downloads. Target
 ## Using it
 
 ```sh
-./build_nshbox.sh        # dist/nshbox
-./build_kilo.sh          # dist/kilo
+./nshbox/build.sh        # dist/nshbox
+./kilo/build.sh          # dist/kilo
 ./build_all.sh           # everything, both containers
 ```
 

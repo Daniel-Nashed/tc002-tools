@@ -6,8 +6,8 @@
 # (image-tag.sh) and as :latest. Compiling the cross compiler takes about 25
 # minutes; Docker's layer cache makes a repeat instant.
 #
-# Called by run.sh when the image is missing, and directly by ./build_image.sh for
-# an explicit build (the counterpart of ./pull_build_image.sh, which fetches the
+# Called by run.sh when the image is missing, and directly by ./build/build_image.sh for
+# an explicit build (the counterpart of ./build/pull_build_image.sh, which fetches the
 # published image instead).
 #
 #   build-image.sh            build if the image for the current inputs is not here
@@ -65,7 +65,7 @@ IMAGE_LOG="${REPO_ROOT}/build/work-musl/image-build.log"
 mkdir -p "$(dirname "$IMAGE_LOG")"
 
 echo "[build image] building ${IMAGE_REF} (the compiler takes about 25 minutes;" >&2
-echo "[build image] ./pull_build_image.sh fetches the published image instead, if there is one for this platform)" >&2
+echo "[build image] ./build/pull_build_image.sh fetches the published image instead, if there is one for this platform)" >&2
 
 docker build --build-arg ALPINE_VERSION="$ALPINE_VERSION" --build-arg MCM_COMMIT="$MCM_COMMIT" \
   -t "$IMAGE_REF" -t "${IMAGE}:latest" "$SCRIPT_DIR" 2>&1 | tee "$IMAGE_LOG" >&2

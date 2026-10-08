@@ -1,6 +1,6 @@
 # build/docker-ubuntu/
 
-A disposable Ubuntu/glibc image for **native** builds - used only by `build/test_nshbox_functional.sh`, which builds
+A disposable Ubuntu/glibc image for **native** builds - used only by `nshbox/test_functional.sh`, which builds
 and runs `tests/nshbox/`, the nshbox functional test harness. Every device deliverable cross-compiles FOR the TC002
 in [build/docker-alpine-arm](../docker-alpine-arm/README.md)'s ARM musl image; `tests/nshbox/` instead runs entirely on whatever
 machine is running it and touches no device at all, so it needs a plain native build - same idea as
@@ -10,7 +10,7 @@ machine is running it and touches no device at all, so it needs a plain native b
 ## What to actually type
 
 ```sh
-./test_nshbox.sh
+./nshbox/test.sh
 ```
 
 Same pattern as every other top-level wrapper - it calls `run.sh` in this directory, which talks to Docker exactly
@@ -31,7 +31,7 @@ Reclaim the space yourself if you want to:
 docker rmi tc002-tools-test-ubuntu
 ```
 
-The next `./test_nshbox.sh` run just rebuilds it from scratch.
+The next `./nshbox/test.sh` run just rebuilds it from scratch.
 
 The Ubuntu version comes from `UBUNTU_VERSION` in [../versions.env](../versions.env), and `run.sh` passes it to the image
 build; the Dockerfile has no default for it.

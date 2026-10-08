@@ -6,7 +6,7 @@ checks) - the same reasoning that justifies vendoring [kilo](../kilo/README.md) 
 Independent of Dropbear and `nshbox`; none of them depend on it or on each other.
 
 Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for its
-license (MIT-style curl license). No source is vendored into this repository; `build/build_curl.sh` downloads the
+license (MIT-style curl license). No source is vendored into this repository; `curl/build_arm.sh` downloads the
 pinned release tarball fresh at build time, the same way every other `build/` script here handles its upstream
 source.
 
@@ -20,22 +20,22 @@ workaround for the same underlying uncertainty (`ncdu`'s statically-linked `ncur
 betting on TLS library compatibility in the same step, followed this project's "prove the simple thing works before
 adding the risky thing" approach. TLS is the tracked next step that was always intended, now added.
 
-`build/build_curl.sh` now builds with `--with-mbedtls=<path>`, pointing at [build_mbedtls.sh](../build/build_mbedtls.sh)'s
+`curl/build_arm.sh` now builds with `--with-mbedtls=<path>`, pointing at [mbedtls/build_arm.sh](../mbedtls/build_arm.sh)'s
 own output - see that script for why mbedTLS is vendored and cross-built here rather than using a distribution's own
 `libmbedtls-dev:armhf` package (short version: it is an older release line from ~2019, likely with known CVEs patched
 upstream since; this project instead pins a *current* mbedTLS release, same "minimal, current" bar already set for
-[nginx](../nginx/README.md)). curl links against mbedTLS's static archives only - `build_mbedtls.sh` never builds a
+[nginx](../nginx/README.md)). curl links against mbedTLS's static archives only - `mbedtls/build_arm.sh` never builds a
 shared `libmbedtls*.so` in the first place, so there is no dynamic-vs-static ambiguity for curl's link step to get
 wrong, unlike zlib below.
 
-`build_curl.sh` depends on `build_mbedtls.sh` having already run - the top-level `./build_curl.sh` wrapper runs it
+`curl/build_arm.sh` depends on `mbedtls/build_arm.sh` having already run - the `./curl/build.sh` wrapper runs it
 first automatically.
 
 ## Optional libraries: all off
 
 Curl's `configure` auto-links whichever *optional* feature libraries it finds on the build host (`nghttp2`, `libidn2`,
 `libldap`, `libpsl`, `zstd`, `brotli`). Rather than rely on "the container happens not to have them",
-`build/build_curl.sh` explicitly passes `--disable-ldap --disable-ldaps --without-brotli --without-zstd
+`curl/build_arm.sh` explicitly passes `--disable-ldap --disable-ldaps --without-brotli --without-zstd
 --without-libpsl --without-libidn2 --without-nghttp2`.
 
 ## zlib: kept, statically linked
@@ -51,7 +51,7 @@ the device, which is the class of build-time-versus-device library mismatch that
 Curl's default build produces both a static and a shared `libcurl` and links the `curl` CLI against the shared one, so
 `src/curl` is a libtool wrapper *shell script* around a real ELF that needs `libcurl.so.4`. Neither can be deployed as
 is. `--disable-shared` (plus `curl_LDFLAGS=-all-static`) forces a single self-contained binary, and
-`build/build_curl.sh` checks `file` output for `ELF` before trusting anything else about the result.
+`curl/build_arm.sh` checks `file` output for `ELF` before trusting anything else about the result.
 
 ## The /dev/random trap (why curl hung on the device)
 
@@ -61,7 +61,7 @@ glibc, so on musl it is always `/dev/random` (`MBEDTLS_PLATFORM_DEV_RANDOM`, who
 2 x 128 bytes at startup, and the device only has about 60 bits of entropy credited (`/proc/sys/kernel/random/entropy_avail`)
 - so every curl start, even `curl --version`, waited forever. Found with `qemu-arm -strace curl --version` on the build
 host (`open("/dev/random")` followed by a 128-byte `readv`, twice; it returns at once there, where the host has plenty
-of entropy). `build/build_mbedtls.sh` now sets `MBEDTLS_PLATFORM_DEV_RANDOM` to `"/dev/urandom"` (which never blocks
+of entropy). `mbedtls/build_arm.sh` now sets `MBEDTLS_PLATFORM_DEV_RANDOM` to `"/dev/urandom"` (which never blocks
 and, once the kernel's generator is initialised - it is, `getrandom()` works on this device - is as good) and checks
 after the build that `libmbedcrypto.a` contains no `/dev/random`. Anything linking this mbedTLS is affected the same
 way; nshbox only uses its hash functions, which need no randomness.
@@ -69,7 +69,7 @@ way; nshbox only uses its hash functions, which need no randomness.
 ## Build
 
 ```sh
-./build_curl.sh
+./curl/build.sh
 ```
 
 Built fully static with the musl toolchain (Alpine ARM32 container, see

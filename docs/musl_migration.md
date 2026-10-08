@@ -27,7 +27,7 @@ musl has neither problem. Buster was also end of life (`archive.debian.org`).
   commit, since Alpine has no such package) and an ARM sysroot of Alpine's own armv7 static libraries (ncurses, zlib).
   Docker's layer cache makes everything after the first build instant.
 - **Static binaries only:** `readelf -d` shows no NEEDED entry and no program interpreter. `build/common.sh`'s
-  `verify_static_binary` and `./verify.sh` check this for every artifact.
+  `verify_static_binary` and `./tests/verify.sh` check this for every artifact.
 - **Size flags:** `-Os -ffunction-sections -fdata-sections` and `-Wl,--gc-sections` for everything; per component the
   features nothing on the device needs are switched off (see below).
 - **Two native containers remain, for host-side work only:** [build/docker-alpine](../build/docker-alpine/README.md)
@@ -63,7 +63,7 @@ Stripped sizes of the current artifacts (`dist/`):
   itself for every connection, which works through the symlinks the installer creates. `runtime/init.sh` recreates a
   missing link at boot.
 - **mbedTLS for nshbox's checksums** (instead of OpenSSL's `libcrypto`) and for curl, statically linked. Its
-  `MBEDTLS_PLATFORM_DEV_RANDOM` is set to `/dev/urandom` by `build/build_mbedtls.sh`: on musl mbedTLS reads
+  `MBEDTLS_PLATFORM_DEV_RANDOM` is set to `/dev/urandom` by `mbedtls/build_arm.sh`: on musl mbedTLS reads
   `/dev/random`, which on the device's 4.9 kernel is the blocking pool with about 60 bits credited, so every curl start
   (even `curl --version`) hung waiting for entropy. Found with `qemu-arm -strace`; the build now checks that
   `libmbedcrypto.a` contains no `/dev/random`.
@@ -78,7 +78,7 @@ Stripped sizes of the current artifacts (`dist/`):
   module is kept (exact and wildcard names only) and needs `user root;`. The versions of nginx and everything else are in [build_platform.md](build_platform.md#toolchain-and-versions).
 - **7-Zip and other components** got their own trimming (RAR off, `-Os`, `--gc-sections`): 7zz went from 2.27 MB to 1.67 MB.
 - **Build tooling:** every build script prints its elapsed time; `build/build_all_musl.sh` is the in-container driver
-  behind the root `./build_all.sh`; the root `./build_*.sh` wrappers each run one component in the container. Bash traps
+  behind the root `./build_all.sh`; the `./<name>/build.sh` wrappers each run one component in the container. Bash traps
   found on the way and fixed everywhere: a `grep -q` or `| head -n1` on the right of a pipe under `set -o pipefail` can
   exit with SIGPIPE (141) and look like a failure, so output is captured first and searched (`sed -n '1p'` instead of
   `head`).
@@ -97,11 +97,11 @@ OpenSSL CLI is left out of the default pack because it is too big for this devic
 
 ```sh
 ./build_all.sh --all      # everything, in the Alpine ARM container (curl, nginx, openssl CLI, 7-Zip are opt-in)
-./verify.sh               # every artifact: ARM EABI hard-float, fully static, stripped, no build-host paths, manifest
+./tests/verify.sh               # every artifact: ARM EABI hard-float, fully static, stripped, no build-host paths, manifest
 ./tc002_setup.sh          # deploy to the device over adb
 tests/nginx/run_test.sh   # on the device: nginx -t, HTTP, map, stub_status, TLS 1.2/1.3 with RSA and ECDSA, memory
-./test_nshbox.sh          # host-side nshbox functional tests against GNU tools (Ubuntu container)
-./test_build_nshbox_native.sh top -l 5   # nshbox built for this host (dist/amd64/ or dist/arm64/), then run
+./nshbox/test.sh          # host-side nshbox functional tests against GNU tools (Ubuntu container)
+./nshbox/test_build_native.sh top -l 5   # nshbox built for this host (dist/amd64/ or dist/arm64/), then run
 ```
 
 Verified on the device so far: nshbox (DNS lookups, `hostname`), kilo, gzip, curl (`--version`, HTTPS), 7zz, ncdu, adb

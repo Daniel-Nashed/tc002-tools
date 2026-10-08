@@ -1,6 +1,6 @@
 # build/docker-alpine/
 
-A disposable Alpine/musl image for **native** builds - used only by `build/build_tc002-discover.sh`. Every other
+A disposable Alpine/musl image for **native** builds - used only by `tc002-discover/build_native.sh`. Every other
 component in this project cross-compiles FOR the TC002 device in [build/docker-alpine-arm](../docker-alpine-arm/README.md)'s
 ARM musl image; `tc002-discover` instead runs ON whatever machine is doing device discovery, so it needs a plain
 native build for that machine's own architecture, not an ARM cross-compile. See
@@ -9,7 +9,7 @@ native build for that machine's own architecture, not an ARM cross-compile. See
 ## What to actually type
 
 ```sh
-./build_tc002-discover.sh
+./tc002-discover/build.sh
 ```
 
 Same pattern as every other top-level `build_*.sh` wrapper - it calls `run.sh` in this directory, which talks to

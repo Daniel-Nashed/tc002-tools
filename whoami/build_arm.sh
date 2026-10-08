@@ -2,15 +2,15 @@
 # Builds certgen_mbedtls/whoami_mbedtls (mbedTLS) and, if OpenSSL has been built
 # too, certgen_openssl/whoami_openssl - four separate binaries (two jobs,
 # each once per library), statically linked against this project's own
-# ARM32 musl builds of each library (build/build_mbedtls.sh,
-# build/build_openssl.sh) - the exact same static libs curl/nginx/nshbox
+# ARM32 musl builds of each library (mbedtls/build_arm.sh,
+# openssl/build_arm.sh) - the exact same static libs curl/nginx/nshbox
 # already use. Not part of build_all.sh/build_all_musl.sh - this is a
 # standalone measurement tool (see README.md), not a project deliverable.
 #
 # Usage (from the repo root):
-#   ./build_mbedtls.sh          # if not already built
-#   ./build_openssl.sh          # optional - only needed for the OpenSSL binaries
-#   ./build_whoami.sh
+#   ./mbedtls/build.sh          # if not already built
+#   ./openssl/build.sh          # optional - only needed for the OpenSSL binaries
+#   ./whoami/build.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +20,7 @@ require_container
 require_musl_toolchain
 
 if [ ! -f "${MBEDTLS_INSTALL_DIR}/lib/libmbedtls.a" ]; then
-  die "mbedTLS is not built yet at ${MBEDTLS_INSTALL_DIR} - run ./build_mbedtls.sh (or build/docker-alpine-arm/run.sh build/build_mbedtls.sh) first"
+  die "mbedTLS is not built yet at ${MBEDTLS_INSTALL_DIR} - run ./mbedtls/build.sh (or build/docker-alpine-arm/run.sh mbedtls/build_arm.sh) first"
 fi
 
 BUILT=()
@@ -56,7 +56,7 @@ OPENSSL_SDK_DIR="${OPENSSL_INSTALL_DIR}/sdk"
 if [ -f "${OPENSSL_SDK_DIR}/lib/libssl.a" ]; then
   header "whoami: building (OpenSSL, ARM32 musl, static, stripped)"
 
-  # -ldl -pthread -latomic: this project's own build_openssl.sh confirmed
+  # -ldl -pthread -latomic: this project's own openssl/build_arm.sh confirmed
   # these directly against OpenSSL's real generated Makefile's CNF_EX_LIBS
   # for this exact target - every OpenSSL-linked binary here needs the
   # same set, not just the openssl CLI.
@@ -66,7 +66,7 @@ if [ -f "${OPENSSL_SDK_DIR}/lib/libssl.a" ]; then
   build_one certgen_openssl "$OPENSSL_CFLAGS" "$OPENSSL_LDFLAGS"
   build_one whoami_openssl "$OPENSSL_CFLAGS" "$OPENSSL_LDFLAGS"
 else
-  log "OpenSSL not built at ${OPENSSL_SDK_DIR} - skipping certgen_openssl/whoami_openssl (run ./build_openssl.sh first to include them)"
+  log "OpenSSL not built at ${OPENSSL_SDK_DIR} - skipping certgen_openssl/whoami_openssl (run ./openssl/build.sh first to include them)"
 fi
 
 header "whoami: sizes"

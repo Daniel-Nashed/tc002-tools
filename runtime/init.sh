@@ -75,7 +75,7 @@ done
 # "command not found" the first time someone tries to use it over SSH.
 # dropbear, scp, dropbearkey, dbclient and dropbearconvert are symlinks to
 # ONE multi-call binary, dropbearmulti (each program runs according to the
-# name it is started as - see build/build_dropbear.sh). Recreate any that is
+# name it is started as - see dropbear/build_arm.sh). Recreate any that is
 # missing or broken, so a partial install or a lost link cannot leave the
 # device without ssh. An existing working file of that name (e.g. an old
 # separate binary) is left alone.

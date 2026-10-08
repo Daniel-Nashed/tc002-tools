@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Builds the core deliverables and attaches them to a GitHub release, the same way
-# nshgeoip and nshmqtt do: run ./push-release.sh (it tags vX.Y.Z from
+# nshgeoip and nshmqtt do: run ./tools/release/push-release.sh (it tags vX.Y.Z from
 # nshbox/src/version.h), then publish a release for that tag on GitHub. This
 # workflow runs when the release is published or edited. It reads the version from
 # nshbox/src/version.h (not version.txt), refuses a release whose tag does not
 # match it, builds in the prebuilt ARM image (build.yml), and uploads the files
-# that create_release_taz.sh puts in release/.
+# that tools/release/create_release_taz.sh puts in release/.
 name: Release
 
 on:
@@ -43,7 +43,7 @@ jobs:
         run: |
           if [ "${{ github.event.release.tag_name }}" != "v${VERSION}" ]; then
             echo "Release tag ${{ github.event.release.tag_name }} does not match nshbox/src/version.h (v${VERSION})." >&2
-            echo "Run ./push-release.sh, or fix the version, before publishing the release." >&2
+            echo "Run ./tools/release/push-release.sh, or fix the version, before publishing the release." >&2
             exit 1
           fi
 
@@ -54,7 +54,7 @@ jobs:
           path: dist
 
       - name: Collect the release files
-        run: ./create_release_taz.sh
+        run: ./tools/release/create_release_taz.sh
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v3

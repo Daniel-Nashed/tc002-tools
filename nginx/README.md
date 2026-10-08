@@ -5,7 +5,7 @@ to serve or front the device's own services over HTTP. Independent of Dropbear, 
 `curl`; none of them depend on it or on each other.
 
 Third-party code, not owned by this project - see [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for its
-license (2-clause BSD). No source is vendored into this repository; `build/build_nginx.sh` downloads the pinned
+license (2-clause BSD). No source is vendored into this repository; `nginx/build_arm.sh` downloads the pinned
 release tarball fresh at build time, the same way every other `build/` script here handles its upstream source.
 
 Pinned to nginx.org's **Mainline** branch (the 1.31 line), not **Stable** (the 1.30 line this project first used) - a
@@ -38,17 +38,17 @@ detour through 3.5 LTS on a since-corrected diagnosis of a real build failure), 
 `-Wl,-rpath` dance, then an actual `libatomic.so.1: cannot open shared object file`
 failure) - the same class of risk this project already avoids for curl's mbedTLS.
 
-`build/build_nginx.sh` passes `--with-http_ssl_module`, plus `--with-cc-opt`/`--with-ld-opt` pointed at
-`build_openssl.sh`'s `sdk/` output directory (confirmed directly in `auto/lib/openssl/conf`, 2026-09-12: this is a
+`nginx/build_arm.sh` passes `--with-http_ssl_module`, plus `--with-cc-opt`/`--with-ld-opt` pointed at
+`openssl/build.sh`'s `sdk/` output directory (confirmed directly in `auto/lib/openssl/conf`, 2026-09-12: this is a
 plain link-only feature test against `-lssl -lcrypto`, no QEMU-requiring execute step, unlike the OS-detection
 `--crossbuild` works around). Deliberately **not** `--with-openssl=<path>` - that flag makes nginx compile its own
 private OpenSSL copy *from source* as part of nginx's own build (the same mode as `--with-zlib=<source-dir>`, see
 below) - not what's wanted when there's already a separately-built OpenSSL to link against instead. Since
-`build_openssl.sh`'s `sdk/lib/` now contains only `libssl.a`/`libcrypto.a` - no `.so` at all - `-lssl`/
+`openssl/build.sh`'s `sdk/lib/` now contains only `libssl.a`/`libcrypto.a` - no `.so` at all - `-lssl`/
 `-lcrypto` resolve to the static archives unambiguously, the same "only a `.a` exists there" reasoning already used
 for curl's mbedTLS (see [curl/README.md](../curl/README.md)) - no `-Wl,-Bstatic` wrapping or rpath needed for
 OpenSSL itself. `--with-ld-opt` does still carry one `-Wl,-Bstatic,-latomic,-Bdynamic`, since nginx pulls in the
-same `libcrypto.a` object code that needs `libatomic` - but unlike `build_openssl.sh`'s own build (see
+same `libcrypto.a` object code that needs `libatomic` - but unlike `openssl/build.sh`'s own build (see
 [openssl/README.md](../openssl/README.md) for why a bare `Configure` argument did not work there: OpenSSL's own
 build system independently bakes its own unwrapped `-latomic` into a separate `CNF_EX_LIBS` variable, appended
 after `LDFLAGS`), nginx's build has no competing auto-detected source of `-latomic` of its own - a plain `.a`
@@ -56,16 +56,16 @@ archive carries no dependency metadata the way a libtool `.la` file does, so wha
 should be the only source in nginx's own link line. Not yet confirmed against a real build, though - worth
 verifying this assumption holds the same way the `CNF_EX_LIBS` one did not.
 
-`build_nginx.sh` depends on `build_openssl.sh` having already run - but this pipeline never builds OpenSSL for you.
-`build_openssl.sh` takes real, non-trivial time, and it always does a full clean rebuild every time it runs (like
+`nginx/build.sh` depends on `openssl/build.sh` having already run - but this pipeline never builds OpenSSL for you.
+`openssl/build.sh` takes real, non-trivial time, and it always does a full clean rebuild every time it runs (like
 every other `build_*.sh` here); auto-triggering that on every single nginx iteration once a working build already
-exists was tried and rejected as pure waste. Instead, both the top-level `./build_nginx.sh` (before even building
-the Docker image) and `build/build_nginx.sh`'s own `main()` (before nginx's own tarball is even downloaded, not
+exists was tried and rejected as pure waste. Instead, both the `./nginx/build.sh` (before even building
+the Docker image) and `nginx/build_arm.sh`'s own `main()` (before nginx's own tarball is even downloaded, not
 buried inside `configure_and_build()` where it used to live) check that `dist/openssl/sdk/lib/{libssl,libcrypto}.a`
-already exist, and fail immediately with a clear message to run `./build_openssl.sh` yourself if they don't -
+already exist, and fail immediately with a clear message to run `./openssl/build.sh` yourself if they don't -
 rather than after wasting a download and extraction on nginx's own source for nothing.
 
-Pass `--without-tls` (to either the top-level `./build_nginx.sh` or `build/build_nginx.sh` directly) to skip the
+Pass `--without-tls` (to either the `./nginx/build.sh` or `nginx/build_arm.sh` directly) to skip the
 OpenSSL requirement entirely and fall back to nginx's original pre-OpenSSL configure flags (no
 `--with-http_ssl_module` at all) - a deliberate escape hatch for building nginx on its own when OpenSSL is not
 built yet, or not wanted for a given run, rather than the only options being "build OpenSSL first" or "edit this
@@ -112,7 +112,7 @@ Verified end to end with a real native (x86_64) build of this exact flag set (20
 `stub_status`, and `proxy_pass` to a backend all confirmed working.
 
 Nothing here is final - if you need `rewrite` or any of the disabled modules later, that is a small, tracked
-addition to `build/build_nginx.sh`'s flag list, not a redesign.
+addition to `nginx/build_arm.sh`'s flag list, not a redesign.
 
 ## zlib (gzip's dependency): kept, statically linked
 
@@ -140,7 +140,7 @@ for a performance-tuning-only quirk.
 ## Build
 
 ```sh
-./build_nginx.sh
+./nginx/build.sh
 ```
 
 Runs inside the build container like every other `build/` script - see
@@ -156,9 +156,9 @@ and executes even in `--crossbuild` mode. **Now solved without registering anyth
 cross-compiler and, for a test program named `autotest`, replaces the executable with a launcher script that runs it
 under `qemu-arm` (the Alpine package, installed in the build image) with a private root holding the musl loader. The
 final `objs/nginx` link is untouched. The text below is the history of the earlier approach - a one-off `--privileged`
-binfmt_misc registration (`register_qemu_arm.sh`, since removed), called from both the top-level [build_nginx.sh](../build_nginx.sh) and the root [build_all.sh](../build_all.sh) whenever it
-is about to build nginx (`--with-nginx`/`--all`, or `build_all.sh build/build_nginx.sh` directly) - originally only
-`build_nginx.sh` did this, which meant building nginx via `build_all.sh` alone silently skipped it and failed
+binfmt_misc registration (`register_qemu_arm.sh`, since removed), called from both the top-level [nginx/build.sh](build.sh) and the root [build_all.sh](../build_all.sh) whenever it
+is about to build nginx (`--with-nginx`/`--all`, or `build_all.sh nginx/build_arm.sh` directly) - originally only
+`nginx/build.sh` did this, which meant building nginx via `build_all.sh` alone silently skipped it and failed
 confusingly at `./configure: error: C compiler ... is not found` (confirmed as a real failure, 2026-09-15 - the
 compiler itself works fine, it just cannot execute the resulting ARM test binary without this registration).
 
